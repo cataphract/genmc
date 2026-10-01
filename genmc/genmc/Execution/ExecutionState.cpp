@@ -95,6 +95,9 @@ void ExecutionState::clear()
 	/* non-atomic value */
 	lastNAWriteVal_.clear();
 	lastIsNA_.clear();
+#if EMIT_NA_LABELS
+	lastWriteAccess_.clear();
+#endif
 
 	/* race detection */
 	lastNAReadView_.clear();
@@ -145,7 +148,7 @@ auto ExecutionState::isAtomicAccessConsistent(const AAccess &access) const -> bo
 {
 	auto iv = makeInterval(access);
 
-	/* Overlapping atomic accesses have to have the same size. Inspect
+	/* Overlapping atomic accesses have to have identical ranges. Inspect
 	 * *all* overlapping segments: a wide access can span several narrower
 	 * ones (e.g. a 16-bit access over two 8-bit ones), which find() misses
 	 * because no single segment fully contains it. */
@@ -160,6 +163,21 @@ auto ExecutionState::isAtomicAccessConsistent(const AAccess &access) const -> bo
 	};
 
 	return allSegmentsMatch(lastAWriteView_) && allSegmentsMatch(lastAReadView_);
+}
+
+auto ExecutionState::isNALoadConsistent([[maybe_unused]] const AAccess &access) const -> bool
+{
+#if EMIT_NA_LABELS
+	auto interval = makeInterval(access);
+	for (auto it = lastWriteAccess_.lower_bound(interval),
+		  ie = lastWriteAccess_.upper_bound(interval);
+	     it != ie; ++it) {
+		/* Compare the original write, not the potentially split segment. */
+		if (it->second.value() != access)
+			return false;
+	}
+#endif
+	return true;
 }
 
 auto ExecutionState::isFreed(SAddr addr) const -> bool
@@ -592,4 +610,7 @@ void ExecutionState::updateLastWriteType(const AAccess &access, bool isAtomic)
 {
 	auto interval = makeInterval(access);
 	lastIsNA_.add(std::make_pair(interval, NonRevertibleOptional<bool>{!isAtomic}));
+#if EMIT_NA_LABELS
+	lastWriteAccess_.add(std::make_pair(interval, NonRevertibleOptional<AAccess>{access}));
+#endif
 }

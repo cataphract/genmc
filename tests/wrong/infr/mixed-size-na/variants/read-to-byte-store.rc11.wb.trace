@@ -1,0 +1,20 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Mixed-size accesses!
+Event (0, 3) in graph:
+<-1, 0>:
+	(0, 1): Rna (output, 1229782938247303441) [INIT] read-to-byte-store.c:8
+	(0, 2): Wna (output, 170) read-to-byte-store.c:11
+	(0, 3): Rna (output, 1229782938247303441) [INIT] read-to-byte-store.c:12
+
+Trace to (0, 3):
+[main] read-to-byte-store.c: 8: assert(output == UINT64_C(0x1111111111111111));
+[main] read-to-byte-store.c: 11: bytes[3] = 0xaa;
+[main] read-to-byte-store.c: 12: return output != UINT64_C(0x11111111aa111111);
+Mixed-size accesses detected: tried to read with a 64-bit access!
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

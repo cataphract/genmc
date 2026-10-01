@@ -1,0 +1,22 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Mixed-size accesses!
+Event (0, 3) in graph:
+<-1, 0>:
+	(0, 1): Wna (data.word, 1229782938247303441) partial-write-remainder.c:10
+	(0, 2): Wna (data.word, 572662306) partial-write-remainder.c:11
+	(0, 3): Rna (data.word, 0) [INIT] partial-write-remainder.c:13
+Coherence:
+data.word: [ (0, 1): Wna (G#(0, 0), 1229782938247303441) (0, 2): Wna (G#(0, 0), 572662306) ]
+
+Trace to (0, 3):
+[main] partial-write-remainder.c: 10: data.word = UINT64_C(0x1111111111111111);
+[main] partial-write-remainder.c: 11: data.halves[0] = UINT32_C(0x22222222);
+[main] partial-write-remainder.c: 13: return data.halves[1] != UINT32_C(0x11111111);
+Mixed-size accesses detected: tried to read with a 32-bit access!
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

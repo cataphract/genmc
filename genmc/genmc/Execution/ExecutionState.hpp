@@ -89,6 +89,9 @@ public:
 	[[nodiscard]] auto isStatic(SAddr addr) const -> bool;
 	[[nodiscard]] auto isInitialized(const AAccess &access) const -> bool;
 	[[nodiscard]] auto isAtomicAccessConsistent(const AAccess &access) const -> bool;
+	/** Whether an emitted NA read can use a single same-range write, or static
+	 * initialization. Earlier reads and overwritten writes do not constrain it. */
+	[[nodiscard]] auto isNALoadConsistent(const AAccess &access) const -> bool;
 	[[nodiscard]] auto isFreed(SAddr addr) const -> bool;
 	[[nodiscard]] auto isRetired(SAddr addr) const -> bool;
 
@@ -222,6 +225,9 @@ private:
 #if EMIT_NA_LABELS
 	/* init vals for statics (not cleared) */
 	genmc::IntervalMap<SAddr, InitDataPtr> staticInitData_;
+	/* Original footprints of the latest writes, even when partial overwrites
+	 * split their surviving intervals. Used only by the emitted-label path. */
+	genmc::IntervalMap<SAddr, NonRevertibleOptional<AAccess>> lastWriteAccess_;
 #endif
 
 	/* non-atomic value */

@@ -1,0 +1,23 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (0, 2) conflicts with event (1, 1) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): Rna (word, 286331153) [(1, 1)] race-word-store-byte-load.c:17
+<0, 1> writer:
+	(1, 1): Wna (word, 286331153) race-word-store-byte-load.c:8
+	(1, 2): THREAD_END
+
+Trace to (0, 2):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] race-word-store-byte-load.c: 8: word = UINT32_C(0x11111111);
+Trace to (1, 1):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] race-word-store-byte-load.c: 8: word = UINT32_C(0x11111111);
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

@@ -1503,15 +1503,27 @@ auto GenMCDriver::checkForMixedSize(MemAccessLabel *lab) -> std::optional<Verifi
 {
 	auto *g = lab->getParent();
 
-	if (lab->isNotAtomic())
-		return {};
-
-	if (g->getState().isAtomicAccessConsistent(lab->getAccess()))
+	bool consistent;
+	if (lab->isNotAtomic()) {
+		/* External frontends reconstruct NA values themselves. NA stores
+		 * merely update the footprint against which later reads are checked. */
+		if (!Config::emitNALabels || !genmc::isa<ReadLabel>(lab))
+			return {};
+		consistent = g->getState().isNALoadConsistent(lab->getAccess());
+		/* The emitted-label resolver uses this exact-address co-max write.
+		 * Check it too: state updates need not follow atomic coherence order. */
+		if (const auto *wLab = genmc::dyn_cast<WriteLabel>(g->co_max(lab->getAddr())))
+			consistent = consistent && wLab->getAccess() == lab->getAccess();
+	} else {
+		consistent = g->getState().isAtomicAccessConsistent(lab->getAccess());
+	}
+	if (consistent)
 		return {};
 
 	reportError(lab->getPos(),
 		    {lab->getPos(), VerificationError::VE_MixedSize,
-		     "Mixed-size accesses detected: tried to read with a " +
+		     std::string("Mixed-size accesses detected: tried to ") +
+			     (genmc::isa<ReadLabel>(lab) ? "read" : "write") + " with a " +
 			     std::to_string(lab->getSize().get() * CHAR_BIT) + "-bit access!\n"});
 	return {VerificationError::VE_MixedSize};
 }
@@ -1757,7 +1769,10 @@ auto GenMCDriver::handleNALoad(Event pos, SAddr loc, ASize size, const EventDeps
 
 	auto err = checkAccessValidity(lab->getPos(), lab->getAccess())
 			   .or_else([&] { return checkInitializedMem(lab); })
-			   .or_else([&] { return checkForRaces(lab); });
+			   .or_else([&] { return checkForRaces(lab); })
+			   /* A race is a program error; report it in preference
+			    * to the tool's mixed-size limitation. */
+			   .or_else([&] { return checkForMixedSize(lab); });
 	if (err) {
 		guard.commit();
 		return {*err};

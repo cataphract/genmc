@@ -29,6 +29,20 @@ errors, races on non-atomic variables, as well as some memory errors
 (e.g., double-free error). Users can provide safety specifications for
 their programs by using `assert()` statements.
 
+The LLVM interpreter cannot compose a non-atomic load from differently
+sized writes or extract a subrange of an earlier write. Such loads are
+reported as `Mixed-size accesses`. The check considers the original
+ranges of the latest writes covering the load, including partial
+overwrites. It does not reject differing read widths on untouched static
+initializers, or stores simply because earlier accesses had a different
+size. A subsequent full replacement write permits a same-range load.
+Atomic accesses are only checked against other atomic accesses: an
+atomic load that overlaps differently sized non-atomic writes is not
+rejected, and may observe only part of the stored value. Data races are
+reported in preference to mixed-size accesses. These are tool
+limitations, not necessarily source-program errors, and apply to the
+transformed LLVM-IR.
+
 ## Verifying C/C++ Programs
 
 To verify a C or C++ file, pass it directly to `genmc`. The file should use the `stdatomic.h` and `pthread.h` APIs for concurrency.

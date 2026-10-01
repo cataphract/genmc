@@ -1,0 +1,18 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Mixed-size accesses!
+Event (0, 2) in graph:
+<-1, 0>:
+	(0, 1): Wna (output, 1229782938247303441) word-to-byte-load.c:7
+	(0, 2): Rna (output, 0) [INIT] word-to-byte-load.c:10
+
+Trace to (0, 2):
+[main] word-to-byte-load.c: 7: output = UINT64_C(0x1111111111111111);
+[main] word-to-byte-load.c: 10: return bytes[3] != 0x11;
+Mixed-size accesses detected: tried to read with a 8-bit access!
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0
