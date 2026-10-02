@@ -112,6 +112,25 @@ static auto runOnBasicBlock(BasicBlock &bb, IntrinsicLowering *IL) -> bool
 		if (!I)
 			continue;
 		switch (I->getIntrinsicID()) {
+		case llvm::Intrinsic::umin:
+		case llvm::Intrinsic::umax:
+		case llvm::Intrinsic::smin:
+		case llvm::Intrinsic::smax: {
+			IRBuilder<> builder(I);
+			auto id = I->getIntrinsicID();
+			auto isSigned = id == Intrinsic::smin || id == Intrinsic::smax;
+			auto isMin = id == Intrinsic::umin || id == Intrinsic::smin;
+			auto *a = I->getArgOperand(0);
+			auto *b = I->getArgOperand(1);
+			auto *less = isSigned ? builder.CreateICmpSLT(a, b)
+					      : builder.CreateICmpULT(a, b);
+			auto *select = builder.CreateSelect(less, isMin ? a : b, isMin ? b : a);
+			select->takeName(I);
+			I->replaceAllUsesWith(select);
+			I->eraseFromParent();
+			modified = true;
+			break;
+		}
 		/* In case thread-local variables are not accessed directly, make them */
 		case llvm::Intrinsic::threadlocal_address:
 			I->replaceAllUsesWith(I->getOperand(0));
