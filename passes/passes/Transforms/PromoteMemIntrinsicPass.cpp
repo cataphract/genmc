@@ -38,6 +38,8 @@
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
 
+#include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <ranges>
 #include <utility>
@@ -264,23 +266,63 @@ static auto getPromotionGEPType(Value *op) -> Type *
 	UNREACHABLE();
 }
 
+static void promoteMemCpyBytes(IRBuilder<> &builder, Value *dst, Value *src, uint64_t begin,
+			       uint64_t end, bool isVolatile);
+
 static void promoteMemCpy(IRBuilder<> &builder, Value *dst, Value *src,
-			  const std::vector<Value *> &args, Type *typ, uint64_t &remainingLen)
+			  const std::vector<Value *> &args, Type *typ, uint64_t length,
+			  uint64_t &copiedLen, bool isVolatile)
 {
-	if (remainingLen == 0)
+	if (copiedLen == length)
 		return;
+
+	const auto &layout = builder.GetInsertBlock()->getModule()->getDataLayout();
+	auto offset = static_cast<uint64_t>(
+		layout.getIndexedOffsetInType(getPromotionGEPType(dst), args));
+	/* Padding counts towards the copied prefix, but its contents are
+	 * unspecified: skip it rather than read possibly uninitialized bytes or
+	 * re-write the tail of a field accessed with its allocation size. */
+	copiedLen = std::min(offset, length);
+	if (copiedLen == length)
+		return;
+
+	auto len = layout.getTypeStoreSize(typ).getFixedValue();
+	/* Keep supported integer widths for partial scalars too. Other widths,
+	 * such as i24, can have padded allocation sizes, which the interpreter
+	 * would use as access widths. Copy those prefixes bytewise instead. */
+	if (len > length - copiedLen) {
+		len = length - copiedLen;
+		typ = IntegerType::get(builder.getContext(), len * 8);
+		if (!std::has_single_bit(len) || len > sizeof(uint64_t) ||
+		    layout.getTypeAllocSize(typ) != len) {
+			promoteMemCpyBytes(builder, dst, src, copiedLen, length, isVolatile);
+			copiedLen = length;
+			return;
+		}
+	}
 
 	auto *srcGEP =
 		builder.CreateInBoundsGEP(getPromotionGEPType(src), src, args, "memcpy.src.gep");
 	auto *dstGEP =
 		builder.CreateInBoundsGEP(getPromotionGEPType(dst), dst, args, "memcpy.dst.gep");
 
-	auto len = builder.GetInsertBlock()->getModule()->getDataLayout().getTypeStoreSize(typ);
-	VERIFY(len <= remainingLen);
+	copiedLen += len;
+	auto *srcLoad = builder.CreateAlignedLoad(typ, srcGEP, Align(1), "memcpy.src.load");
+	srcLoad->setVolatile(isVolatile);
+	builder.CreateAlignedStore(srcLoad, dstGEP, Align(1))->setVolatile(isVolatile);
+}
 
-	remainingLen -= len;
-	auto *srcLoad = builder.CreateLoad(typ, srcGEP, "memcpy.src.load");
-	builder.CreateStore(srcLoad, dstGEP);
+static void promoteMemCpyBytes(IRBuilder<> &builder, Value *dst, Value *src, uint64_t begin,
+			       uint64_t end, bool isVolatile)
+{
+	for (auto offset = begin; offset < end; ++offset) {
+		auto *index = builder.getInt64(offset);
+		auto *srcGEP = builder.CreateGEP(builder.getInt8Ty(), src, index);
+		auto *dstGEP = builder.CreateGEP(builder.getInt8Ty(), dst, index);
+		auto *value = builder.CreateAlignedLoad(builder.getInt8Ty(), srcGEP, Align(1));
+		value->setVolatile(isVolatile);
+		builder.CreateAlignedStore(value, dstGEP, Align(1))->setVolatile(isVolatile);
+	}
 }
 
 static void promoteMemSet(IRBuilder<> &builder, Value *dst, Value *argVal,
@@ -448,9 +490,10 @@ static auto tryPromoteMemCpy(MemCpyInst *MI, SmallVector<llvm::MemIntrinsic *, 8
 	auto typeSizeDst = MI->getParent()->getModule()->getDataLayout().getTypeStoreSize(dstTyp);
 	VERIFY(typeSizeDst >= len);
 
+	uint64_t copiedLen = 0;
 	std::vector<Value *> args = {nullInt};
 	promoteMemIntrinsic(dstTyp, args, [&](Type *typ, const std::vector<Value *> &args) {
-		promoteMemCpy(builder, dst, src, args, typ, len);
+		promoteMemCpy(builder, dst, src, args, typ, len, copiedLen, MI->isVolatile());
 	});
 	promoted.push_back(MI);
 	return true;
