@@ -1,9 +1,12 @@
+#include <barrier>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "StubChecker.hpp"
+#include "genmc/ADT/DepView.hpp"
 #include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
 #include "genmc/Execution/EventLabel.hpp"
 #include "genmc/Execution/ExecutionGraph.hpp"
@@ -51,6 +54,66 @@ TEST(ExecutionGraphTest, IfPresentReturnsNullForAbsentPositions)
 	EXPECT_EQ(g.graph.getEventLabelIfPresent(Event(0, -1)), nullptr);
 	EXPECT_EQ(g.graph.getEventLabelIfPresent(Event(-1, 0)), nullptr);
 	EXPECT_EQ(g.graph.getEventLabelIfPresent(Event(g.graph.getNumThreads(), 0)), nullptr);
+}
+
+/* Graphs handed to different workers must not share even the View hidden
+ * inside a DepView prefix. Concurrent cloning exercises both increments and
+ * decrements of its non-atomic intrusive count; run under TSAN as well. */
+TEST(ExecutionGraphTest, ClonedDepPrefixesAreThreadLocal)
+{
+	TestGraph g;
+	DepView prefix;
+	prefix.updateIdx(Event(0, 3));
+	prefix.updateIdx(Event(1, 5)); /* Materialize a shared ViewBase. */
+	for (auto i = 0; i < 8; ++i)
+		g.addFence()->setPrefixView(prefix.clone());
+
+	constexpr auto workerCount = 4;
+	std::barrier start(workerCount);
+	std::vector<std::thread> workers;
+	for (auto i = 0; i < workerCount; ++i) {
+		workers.emplace_back([graph = g.graph.clone(), &start] {
+			start.arrive_and_wait();
+			for (auto trial = 0; trial < 200; ++trial) {
+				auto copy = graph->clone();
+				auto &clock = copy->getEventLabel(Event(0, 1))->getPrefixView();
+				EXPECT_TRUE(genmc::isa<DepView>(&clock));
+				EXPECT_EQ(clock.getMax(0), 3);
+				EXPECT_EQ(clock.getMax(1), 5);
+				EXPECT_FALSE(clock.contains(Event(0, 2)));
+				clock.setMax(Event(0, 7));
+				EXPECT_EQ(clock.getMax(0), 7);
+				EXPECT_EQ(graph->getEventLabel(Event(0, 1))
+						  ->getPrefixView()
+						  .getMax(0),
+					  3);
+			}
+		});
+	}
+	for (auto &worker : workers)
+		worker.join();
+	EXPECT_EQ(prefix.getMax(0), 3);
+	EXPECT_EQ(prefix.getMax(1), 5);
+}
+
+TEST(ExecutionGraphTest, ClonedDepPrefixPreservesPendingDiff)
+{
+	TestGraph g;
+	DepView prefix;
+	prefix.updateIdx(Event(0, 3));
+	prefix.updateIdx(Event(1, 5));
+	auto shared = prefix;
+	prefix.updateIdx(Event(1, 9));
+	g.addFence()->setPrefixView(prefix.clone());
+
+	auto copy = g.graph.clone();
+	auto &clock = copy->getEventLabel(Event(0, 1))->getPrefixView();
+	EXPECT_EQ(clock.getMax(0), 3);
+	EXPECT_EQ(clock.getMax(1), 9);
+	clock.setMax(Event(1, 7));
+	EXPECT_EQ(clock.getMax(1), 7);
+	EXPECT_EQ(prefix.getMax(1), 9);
+	EXPECT_EQ(shared.getMax(1), 5);
 }
 
 /* Locations with no recorded views yield empty views */

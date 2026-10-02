@@ -134,6 +134,8 @@ public:
 	static auto classof(const VectorClock *vc) -> bool { return vc->getKind() == VC_DepView; }
 
 private:
+	friend class ExecutionGraph;
+
 	/** A view containing the highest index seen for each thread */
 	View view_;
 

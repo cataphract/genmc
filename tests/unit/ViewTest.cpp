@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <exception>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -121,6 +122,23 @@ TEST(ViewUnitTest, SetMaxResetsValue)
 	v.setMax({0, 5});
 
 	EXPECT_EQ(v.getMax(0), 5);
+}
+
+TEST(ViewUnitTest, UniqueBaseWithDiffLowersDiffThread)
+{
+	View shared;
+	shared.updateIdx({0, 5});
+	shared.updateIdx({1, 3}); /* hydrate: base = {0:5, 1:3} */
+
+	auto owner = std::make_unique<View>(shared);
+	owner->updateIdx({2, 4}); /* diff on top of the shared base */
+	shared = View();	  /* owner's base becomes unique, diff remains */
+
+	/* Lowering must also discard the pending diff of the same thread. */
+	owner->setMax({2, 1});
+	EXPECT_EQ(owner->getMax(0), 5);
+	EXPECT_EQ(owner->getMax(1), 3);
+	EXPECT_EQ(owner->getMax(2), 1);
 }
 
 TEST(ViewUnitTest, DiffCollisionForcesHydration)

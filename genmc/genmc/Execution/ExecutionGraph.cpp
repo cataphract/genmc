@@ -12,6 +12,7 @@
  */
 
 #include "genmc/Execution/ExecutionGraph.hpp"
+#include "genmc/ADT/DepView.hpp"
 #include "genmc/ADT/Rc.hpp"
 #include "genmc/ADT/VSet.hpp"
 #include "genmc/ADT/View.hpp"
@@ -576,9 +577,15 @@ void ExecutionGraph::copyGraphUpTo(ExecutionGraph &other, const VectorClock &v) 
 	for (auto &lab : other.labels()) {
 		for (auto &view : lab.calculatedViews)
 			fixView(view);
-		if (lab.prefixView)
+		if (lab.prefixView) {
 			if (auto *v = genmc::dyn_cast<View>(lab.prefixView.get()))
 				fixView(*v);
+			else {
+				/* DepView also has a ref-counted ViewBase. Detach it before
+				 * the copied graph can be handed to another worker. */
+				fixView(genmc::cast<DepView>(lab.prefixView.get())->view_);
+			}
+		}
 
 		auto *rLab = genmc::dyn_cast<ReadLabel>(&lab);
 		if (rLab && rLab->getRf()) {

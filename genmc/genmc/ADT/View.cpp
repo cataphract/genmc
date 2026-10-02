@@ -85,9 +85,8 @@ auto View::updateIdx(Event e) -> View &
 	if (contains(e))
 		return *this;
 
-	/* Fastpath: If we are the unique owner, update directly */
-	if (base_ && base_.use_count() == 1) {
-		ASSERT(diff_.isInitializer());
+	/* A unique base can still have a diff after other owners disappear. */
+	if (base_ && diff_.isInitializer() && base_.use_count() == 1) {
 		base_->updateIdx(e);
 		return *this;
 	}
@@ -119,9 +118,8 @@ auto View::getMax(int thread) const -> int
 
 auto View::setMax(Event e) -> void
 {
-	/* Fastpath: If we own the view, set directly */
-	if (base_ && base_.use_count() == 1) {
-		ASSERT(diff_.isInitializer());
+	/* Fastpath: If we own the full view, set directly */
+	if (base_ && diff_.isInitializer() && base_.use_count() == 1) {
 		base_->setMax(e);
 		return;
 	}
@@ -140,8 +138,11 @@ auto View::setMax(Event e) -> void
 
 void View::hydrate()
 {
-	base_ = base_ ? genmc::make_intrusive<detail::ViewBase>(*base_)
-		      : genmc::make_intrusive<detail::ViewBase>();
+	/* A base we alone own can absorb the diff in place */
+	if (!base_)
+		base_ = genmc::make_intrusive<detail::ViewBase>();
+	else if (base_.use_count() != 1)
+		base_ = genmc::make_intrusive<detail::ViewBase>(*base_);
 	if (!diff_.isInitializer()) {
 		base_->updateIdx(diff_);
 		diff_ = Event::getInit();
@@ -160,8 +161,7 @@ auto View::update(const View &v) -> View &
 	};
 
 	/* Fastpath: If we are hydrated already, merge V */
-	if (base_ && base_.use_count() == 1) {
-		ASSERT(diff_.isInitializer());
+	if (base_ && diff_.isInitializer() && base_.use_count() == 1) {
 		merge(v);
 		return *this;
 	}

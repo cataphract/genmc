@@ -29,6 +29,14 @@ if(BUILD_LLI)
   set_tests_properties(parallel-error-replay PROPERTIES
     LABELS "integration;concurrency" TIMEOUT 120)
 
+  add_test(NAME parallel-view-isolation
+    COMMAND ${CMAKE_COMMAND}
+            -DGENMC=$<TARGET_FILE:genmc>
+            -DTEST_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/correct/litmus/wrw/variants/wrw0.c
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/parallel/check-view-isolation.cmake
+  )
+  set_tests_properties(parallel-view-isolation PROPERTIES
+    LABELS "integration;concurrency" TIMEOUT 240)
 endif()
 
 add_test(NAME run-relinche-impl
