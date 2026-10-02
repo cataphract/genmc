@@ -2707,6 +2707,18 @@ void Interpreter::visitInsertValueInst(InsertValueInst &I)
 	SetValue(&I, Dest, SF);
 }
 
+void Interpreter::visitFreezeInst(FreezeInst &I)
+{
+	ExecutionContext &SF = ECStack().back();
+	Value *operand = I.getOperand(0);
+
+	/* The interpreter does not represent poison or undef at runtime, so every
+	 * value reaching freeze is already concrete. Preserve scalars and
+	 * aggregates alike while propagating the operand's dependencies. */
+	updateDataDeps(getCurThr().id, &I, getDataDeps(getCurThr().id, operand));
+	SetValue(&I, getOperandValue(operand, SF), SF);
+}
+
 GenericValue Interpreter::getConstantExprValue(ConstantExpr *CE, ExecutionContext &SF)
 {
 	switch (CE->getOpcode()) {

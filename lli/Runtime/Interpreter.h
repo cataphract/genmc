@@ -492,6 +492,7 @@ public:
 	void visitPtrToIntInst(PtrToIntInst &I);
 	void visitIntToPtrInst(IntToPtrInst &I);
 	void visitBitCastInst(BitCastInst &I);
+	void visitFreezeInst(FreezeInst &I);
 	void visitSelectInst(SelectInst &I);
 
 	void visitCallInstWrapper(CallInstWrapper CIW);
