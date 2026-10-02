@@ -19,6 +19,18 @@ add_test(NAME run-parallel
 )
 set_tests_properties(run-parallel PROPERTIES LABELS "integration;concurrency" TIMEOUT 300)
 
+if(BUILD_LLI)
+  add_test(NAME parallel-error-replay
+    COMMAND ${CMAKE_COMMAND}
+            -DGENMC=$<TARGET_FILE:genmc>
+            -DTEST_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/parallel/error-replay.c
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/parallel/check-error-replay.cmake
+  )
+  set_tests_properties(parallel-error-replay PROPERTIES
+    LABELS "integration;concurrency" TIMEOUT 120)
+
+endif()
+
 add_test(NAME run-relinche-impl
     COMMAND bash -c "${SCRIPT_DIR}/run-relinche-impl.sh > ${SCRIPT_DIR}/run-relinche-impl.log"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

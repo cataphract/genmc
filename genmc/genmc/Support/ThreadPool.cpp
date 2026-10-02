@@ -142,14 +142,17 @@ auto ThreadPool::tryStealOtherQueue() -> ThreadPool::TaskT
 
 auto ThreadPool::popTask() -> ThreadPool::TaskT
 {
-	while (true) {
+	/* A halted worker may still hold an interrupted error replay. Never load a
+	 * different graph into it, even if there is queued work left. Check the stop
+	 * condition and the queue under the same lock used by halt() and submit(). */
+	std::unique_lock<std::mutex> lock(stateMtx_);
+	while (!shouldHalt()) {
 		if (auto task = tryPopPoolQueue())
 			return task;
 		if (auto task = tryStealOtherQueue())
 			return task;
 
-		std::unique_lock<std::mutex> lock(stateMtx_);
-		if (shouldHalt() || getRemainingTasks() == 0)
+		if (getRemainingTasks() == 0)
 			return nullptr;
 		stateCV_.wait(lock);
 	}
