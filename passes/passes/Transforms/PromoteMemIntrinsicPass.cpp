@@ -15,9 +15,12 @@
 #include "genmc/Support/Error.hpp"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/Twine.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DebugInfo.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -58,6 +61,108 @@
 
 using namespace llvm;
 
+static void emitMemoryBoundsFailure(IRBuilder<> &builder, StringRef message);
+
+/* Expand short, bounded byte operations before SROA. Constant byte offsets
+ * let SROA turn copies/comparisons of local scalar object representations into
+ * shifts and masks, avoiding artificial mixed-size memory accesses. */
+static auto lowerBoundedByteOperation(CallInst *call, bool compare) -> bool
+{
+	auto *length = call->getArgOperand(2);
+	auto maximum = computeConstantRange(length, false).getUnsignedMax();
+	auto needsBoundsCheck = false;
+	if (maximum.ugt(32)) {
+		/* A direct, fixed-size alloca also bounds every valid byte access.
+		 * Diagnose an oversized request rather than silently truncating it. */
+		for (auto index : {0U, 1U}) {
+			auto *allocation = dyn_cast<AllocaInst>(
+				call->getArgOperand(index)->stripPointerCasts());
+			if (!allocation)
+				continue;
+			auto size =
+				allocation->getAllocationSize(call->getModule()->getDataLayout());
+			if (size && !size->isScalable() && size->getFixedValue() <= 32) {
+				maximum = APInt(maximum.getBitWidth(), size->getFixedValue());
+				needsBoundsCheck = true;
+				break;
+			}
+		}
+		if (!needsBoundsCheck)
+			return false;
+	}
+	auto count = maximum.getZExtValue();
+	auto *function = call->getFunction();
+	auto &context = call->getContext();
+	auto *before = call->getParent();
+	auto *after = before->splitBasicBlock(call->getIterator(), "bytes.done");
+	before->getTerminator()->eraseFromParent();
+	IRBuilder<> builder(before);
+	builder.SetCurrentDebugLocation(call->getDebugLoc());
+	if (needsBoundsCheck) {
+		auto *valid = BasicBlock::Create(context, "bytes.valid", function, after);
+		auto *invalid = BasicBlock::Create(context, "bytes.invalid", function, after);
+		builder.CreateCondBr(
+			builder.CreateICmpULE(length, ConstantInt::get(context, maximum)), valid,
+			invalid);
+		builder.SetInsertPoint(invalid);
+		emitMemoryBoundsFailure(builder, "byte operation exceeds local object");
+		builder.SetInsertPoint(valid);
+	}
+	PHINode *result = nullptr;
+	if (compare)
+		result = PHINode::Create(call->getType(), count * 2 + 1, "bytes.result",
+					 after->begin());
+	auto *byteType = builder.getInt8Ty();
+	auto *zero = ConstantInt::get(call->getType(), 0);
+	for (uint64_t offset = 0; offset < count; ++offset) {
+		auto *access = BasicBlock::Create(context, "bytes.access", function, after);
+		auto *next = BasicBlock::Create(context, "bytes.next", function, after);
+		auto *index = ConstantInt::get(length->getType(), offset);
+		if (result)
+			result->addIncoming(zero, builder.GetInsertBlock());
+		builder.CreateCondBr(builder.CreateICmpUGT(length, index), access, after);
+		builder.SetInsertPoint(access);
+		auto *left = builder.CreateGEP(byteType, call->getArgOperand(0), index);
+		auto *right = builder.CreateGEP(byteType, call->getArgOperand(1), index);
+		auto *rhs = builder.CreateAlignedLoad(byteType, right, Align(1));
+		if (compare) {
+			auto *lhs = builder.CreateAlignedLoad(byteType, left, Align(1));
+			auto *difference =
+				builder.CreateSub(builder.CreateZExt(lhs, call->getType()),
+						  builder.CreateZExt(rhs, call->getType()));
+			result->addIncoming(difference, access);
+			builder.CreateCondBr(builder.CreateICmpNE(lhs, rhs), after, next);
+		} else {
+			auto *copy = cast<MemCpyInst>(call);
+			rhs->setVolatile(copy->isVolatile());
+			auto *store = builder.CreateAlignedStore(rhs, left, Align(1));
+			store->setVolatile(copy->isVolatile());
+			builder.CreateBr(next);
+		}
+		builder.SetInsertPoint(next);
+	}
+	if (result) {
+		result->addIncoming(zero, builder.GetInsertBlock());
+		call->replaceAllUsesWith(result);
+	}
+	builder.CreateBr(after);
+	call->eraseFromParent();
+	return true;
+}
+
+static void emitMemoryBoundsFailure(IRBuilder<> &builder, StringRef message)
+{
+	auto failure = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+		"__VERIFIER_assert_fail", builder.getVoidTy(), builder.getPtrTy(),
+		builder.getPtrTy(), builder.getInt32Ty());
+	builder.CreateCall(
+		failure,
+		{builder.CreateGlobalString(message, "__genmc_byte_bounds"),
+		 builder.CreateGlobalString("<memory intrinsic>", "__genmc_byte_file"),
+		 builder.getInt32(0)});
+	builder.CreateUnreachable();
+}
+
 /**
  * Lower a call to: __memcpy_chk(void * dest, const void * src, size_t len, size_t destlen);
  *
@@ -95,9 +200,9 @@ static void lowerFortifiedMemCpy(CallInst *CI, Function &F)
 	/* Create a new basic block "memcpy__chk_fail" for inside the IF => aborts using an
 	 * unreachable-instruction */
 	auto *failBB = BasicBlock::Create(F.getContext(), "memcpy__chk_fail", &F);
-	auto *assertFailFun = F.getParent()->getFunction("__VERIFIER_assert_fail");
-	CallInst::Create(assertFailFun, {}, "", failBB);
-	new UnreachableInst(F.getContext(), failBB);
+	IRBuilder<> failBuilder(failBB);
+	failBuilder.SetCurrentDebugLocation(CI->getDebugLoc());
+	emitMemoryBoundsFailure(failBuilder, "memcpy exceeds destination size");
 
 	/* Compare arguments: dstlen < len */
 	auto *dummyTerminator = bb->getTerminator();
@@ -399,6 +504,22 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager & /*FAM*/
 	auto modified = false;
 
 	modified |= lowerFortifiedCalls(F);
+	SmallVector<CallInst *, 8> byteOperations;
+	for (auto &I : instructions(F)) {
+		if (auto *copy = dyn_cast<MemCpyInst>(&I)) {
+			if (!isa<ConstantInt>(copy->getLength()))
+				byteOperations.push_back(copy);
+		} else if (auto *call = dyn_cast<CallInst>(&I)) {
+			if (auto *callee = call->getCalledFunction();
+			    callee && callee->isDeclaration() &&
+			    (callee->getName() == "memcmp" || callee->getName() == "bcmp") &&
+			    call->arg_size() == 3 && call->getType()->isIntegerTy() &&
+			    call->getArgOperand(2)->getType()->isIntegerTy())
+				byteOperations.push_back(call);
+		}
+	}
+	for (auto *call : byteOperations)
+		modified |= lowerBoundedByteOperation(call, !isa<MemCpyInst>(call));
 	for (auto &I : instructions(F)) {
 		if (auto *MI = dyn_cast<MemCpyInst>(&I))
 			modified |= tryPromoteMemCpy(MI, promoted);
