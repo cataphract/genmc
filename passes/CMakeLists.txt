@@ -16,6 +16,7 @@ set(PASSES_SOURCES
   passes/Transforms/EliminateUnusedCodePass.cpp
   passes/Transforms/EscapeCheckerPass.cpp
   passes/Transforms/FunctionInlinerPass.cpp
+  passes/Transforms/GuardSpeculativeLocalLoadsPass.cpp
   passes/Transforms/InstAnnotator.cpp
   passes/Transforms/IntrinsicLoweringPass.cpp
   passes/Transforms/LoadAnnotationPass.cpp

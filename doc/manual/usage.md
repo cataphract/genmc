@@ -43,6 +43,14 @@ reported in preference to mixed-size accesses. These are tool
 limitations, not necessarily source-program errors, and apply to the
 transformed LLVM-IR.
 
+Optimizers may load a union member before the discriminator test that
+makes it meaningful, e.g., in a destructor checking `has_value && ptr !=
+nullptr`. When the storage does not escape its thread and the loaded value
+is used only once that test succeeds, GenMC performs the load only if the
+discriminator selects it. Inactive loads of this kind therefore report
+neither mixed-size accesses nor reads of uninitialized memory, even when
+the source program performs them unconditionally.
+
 ## Verifying C/C++ Programs
 
 To verify a C or C++ file, pass it directly to `genmc`. The file should use the `stdatomic.h` and `pthread.h` APIs for concurrency.

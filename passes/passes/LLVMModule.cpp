@@ -30,6 +30,7 @@
 #include "passes/Transforms/EliminateUnusedCodePass.hpp"
 #include "passes/Transforms/EscapeCheckerPass.hpp"
 #include "passes/Transforms/FunctionInlinerPass.hpp"
+#include "passes/Transforms/GuardSpeculativeLocalLoadsPass.hpp"
 #include "passes/Transforms/IntrinsicLoweringPass.hpp"
 #include "passes/Transforms/LoadAnnotationPass.hpp"
 #include "passes/Transforms/LocalSimplifyCFGPass.hpp"
@@ -250,6 +251,7 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 			fpm.addPass(EliminateCastsPass());
 		fpm.addPass(SROAPass(SROAOptions::PreserveCFG));
 		fpm.addPass(PromotePass()); // Mem2Reg
+		fpm.addPass(GuardSpeculativeLocalLoadsPass());
 		basicOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
 	}
 	basicOptsMGR.addPass(DeadArgumentEliminationPass());

@@ -20,6 +20,14 @@ add_test(NAME run-parallel
 set_tests_properties(run-parallel PROPERTIES LABELS "integration;concurrency" TIMEOUT 300)
 
 if(BUILD_LLI)
+  add_test(NAME guarded-local-load
+    COMMAND ${CMAKE_COMMAND}
+            -DGENMC=$<TARGET_FILE:genmc>
+            -DTEST_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/transforms/check-guarded-local-load.cmake
+  )
+  set_tests_properties(guarded-local-load PROPERTIES LABELS "integration;fast" TIMEOUT 120)
+
   add_test(NAME parallel-error-replay
     COMMAND ${CMAKE_COMMAND}
             -DGENMC=$<TARGET_FILE:genmc>
