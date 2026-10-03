@@ -418,10 +418,11 @@ static auto getNextOrBranchSuccessorsInLoop(Instruction *i, const VSet<BasicBloc
 	if (!backedgePaths.contains(i->getParent()) || i == &*l->getHeader()->begin())
 		return succs;
 
-	/* Sanity checks for side-effects: only CASes and effect-free calls are allowed */
+	/* Sanity checks for side-effects: only CASes, (local) stores and effect-free calls
+	 * are allowed */
 	auto *ci = llvm::dyn_cast<CallInst>(i);
 	auto inCleanSet = ci && cleanSet && cleanSet->contains(ci->getCalledFunction());
-	VERIFY(!hasSideEffects(i) || isa<AtomicCmpXchgInst>(i) || inCleanSet);
+	VERIFY(!hasSideEffects(i) || isa<AtomicCmpXchgInst>(i) || isa<StoreInst>(i) || inCleanSet);
 
 	/* Find successors */
 	if (i->getNextNode())
@@ -457,7 +458,7 @@ auto InstAnnotator::propagateAnnotFromSuccInLoop(Instruction *curr, Instruction 
 	if (isa<BranchInst>(curr) ||
 	    (isa<PHINode>(curr) && curr->getParent() == succ->getParent()) ||
 	    isa<AtomicCmpXchgInst>(curr) || isa<ExtractValueInst>(curr) || isa<LoadInst>(curr) ||
-	    isa<CallInst>(curr))
+	    isa<StoreInst>(curr) || isa<CallInst>(curr))
 		return succExp;
 
 	/* Transform assume()s into disjunctions */
@@ -499,11 +500,10 @@ void InstAnnotator::annotateCASWithBackedgeCondDFS(Instruction *curr,
 			setAnnot(curr, ConcreteExpr<Value *>::createFalse());
 			return;
 		}
-		if (curr->getParent() == l->getHeader()) {
-			setAnnot(curr, ConcreteExpr<Value *>::createTrue());
-			return;
-		}
-		UNREACHABLE();
+		/* Either the header, or a terminator other than a branch (e.g., a
+		 * switch), which we cannot follow: assume it leads to the header */
+		setAnnot(curr, ConcreteExpr<Value *>::createTrue());
+		return;
 	}
 
 	/* If this is a branch instruction, create a select expression */
@@ -529,10 +529,10 @@ auto InstAnnotator::annotateCASWithBackedgeCond(AtomicCmpXchgInst *curr, BasicBl
 	/* Reset DFS data */
 	reset();
 
-	/* Collect backedge paths */
-	VSet<BasicBlock *> backedgePaths;
-	foreachInBackPathTo(latch, l->getHeader(),
-			    [&](Instruction &i) { backedgePaths.insert(i.getParent()); });
+	/* Collect the blocks of the backedge paths. These must include inner
+	 * cycles, which lie on no simple path: a CAS can succeed inside one, or
+	 * succeed and then return to the header through one */
+	auto backedgePaths = getLoopBlocksReaching(latch, l);
 
 	for (auto &i : instructions(curr->getParent()->getParent()))
 		statusMap[&i] = InstAnnotator::unseen;

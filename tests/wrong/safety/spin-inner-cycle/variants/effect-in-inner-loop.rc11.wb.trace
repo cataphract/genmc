@@ -1,0 +1,36 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (0, 13) in graph:
+<-1, 0>:
+	(0, 1): LOOP_BEGIN effect-in-inner-loop.c:12
+	(0, 2): SPIN_START
+	(0, 3): Rrlx (x, 0) [INIT] effect-in-inner-loop.c:12
+	(0, 4): URrlx (x, 0) [INIT] effect-in-inner-loop.c:14
+	(0, 5): UWrlx (x, 1) effect-in-inner-loop.c:14
+	(0, 6): SPIN_START
+	(0, 7): Rrlx (x, 1) [(0, 5)] effect-in-inner-loop.c:12
+	(0, 8): URrlx (x, 1) [(0, 5)] effect-in-inner-loop.c:14
+	(0, 9): UWrlx (x, 2) effect-in-inner-loop.c:14
+	(0, 10): SPIN_START
+	(0, 11): Rrlx (x, 2) [(0, 9)] effect-in-inner-loop.c:12
+	(0, 12): Rrlx (x, 2) [(0, 9)] effect-in-inner-loop.c:16
+	(0, 13): ERROR effect-in-inner-loop.c:16
+Coherence:
+x: [ (0, 5): UWrlx (G#(0, 0), 1) (0, 9): UWrlx (G#(0, 0), 2) ]
+
+Trace to (0, 13):
+[main] effect-in-inner-loop.c: 12: while (atomic_load_explicit(&x, memory_order_relaxed) < 2) {
+[main] effect-in-inner-loop.c: 12: while (atomic_load_explicit(&x, memory_order_relaxed) < 2) {
+[main] effect-in-inner-loop.c: 14: atomic_fetch_add_explicit(&x, 1, memory_order_relaxed);
+[main] effect-in-inner-loop.c: 12: while (atomic_load_explicit(&x, memory_order_relaxed) < 2) {
+[main] effect-in-inner-loop.c: 14: atomic_fetch_add_explicit(&x, 1, memory_order_relaxed);
+[main] effect-in-inner-loop.c: 12: while (atomic_load_explicit(&x, memory_order_relaxed) < 2) {
+[main] effect-in-inner-loop.c: 16: assert(atomic_load_explicit(&x, memory_order_relaxed) != 2);
+[main] effect-in-inner-loop.c: 16: assert(atomic_load_explicit(&x, memory_order_relaxed) != 2);
+Assertion violation: atomic_load_explicit(&x, memory_order_relaxed) != 2
+*** Verification unsuccesful.
+Number of complete executions explored: 0

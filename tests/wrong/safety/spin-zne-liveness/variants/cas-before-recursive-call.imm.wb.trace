@@ -1,0 +1,51 @@
+WARNING: In-place revisiting and symmetry reduction have no effect under IMM
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (2, 4) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:146
+	(0, 3): THREAD_END
+<0, 1> t1:
+	(1, 1): LOOP_BEGIN cas-before-recursive-call.c:19
+	(1, 2): SPIN_START
+	(1, 3): URsc (x, 0) [INIT] cas-before-recursive-call.c:20
+	(1, 4): UWsc (x, 1) cas-before-recursive-call.c:20
+	(1, 5): CRsc (y, 0) [INIT] cas-before-recursive-call.c:22
+	(1, 6): CWsc (y, 1) cas-before-recursive-call.c:22
+	(1, 7): LOOP_BEGIN cas-before-recursive-call.c:10
+	(1, 8): SPIN_START
+	(1, 9): Rsc (z, 0) [INIT] cas-before-recursive-call.c:10
+	(1, 10): Rsc (done, 0) [INIT] cas-before-recursive-call.c:24
+	(1, 11): URsc (x, 1) [(1, 4)] cas-before-recursive-call.c:26
+	(1, 12): UWsc (x, 0) cas-before-recursive-call.c:26
+	(1, 13): SPIN_START
+	(1, 14): URsc (x, 0) [(2, 3)] cas-before-recursive-call.c:20
+	(1, 15): UWsc (x, 1) cas-before-recursive-call.c:20
+<0, 2> t2:
+	(2, 1): Rsc (y, 1) [(1, 6)] cas-before-recursive-call.c:33
+	(2, 2): URsc (x, 0) [(1, 12)] cas-before-recursive-call.c:34
+	(2, 3): UWsc (x, 0) cas-before-recursive-call.c:34
+	(2, 4): ERROR cas-before-recursive-call.c:34
+Coherence:
+x: [ (1, 4): UWsc (G#(0, 4), 1) (1, 12): UWsc (G#(0, 4), 0) (2, 3): UWsc (G#(0, 4), 0) (1, 15): UWsc (G#(0, 4), 1) ]
+
+Trace to (2, 4):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t1] cas-before-recursive-call.c: 19: for (;;) {
+[t1] cas-before-recursive-call.c: 20: atomic_fetch_add(&x, 1);
+[t1] cas-before-recursive-call.c: 22: atomic_compare_exchange_strong(&y, &e, 1);
+[t2] cas-before-recursive-call.c: 33: if (atomic_load(&y) == 1)
+[t1] cas-before-recursive-call.c: 10: while (atomic_load(&z) == 5)
+[t1] cas-before-recursive-call.c: 10: while (atomic_load(&z) == 5)
+[t1] cas-before-recursive-call.c: 24: if (atomic_load(&done))
+[t1] cas-before-recursive-call.c: 26: atomic_fetch_sub(&x, 1);
+[t2] cas-before-recursive-call.c: 34: assert(atomic_fetch_add(&x, 0) != 0);
+[t2] cas-before-recursive-call.c: 34: assert(atomic_fetch_add(&x, 0) != 0);
+Assertion violation: atomic_fetch_add(&x, 0) != 0
+*** Verification unsuccesful.
+Number of complete executions explored: 2

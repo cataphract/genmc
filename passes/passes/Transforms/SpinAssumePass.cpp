@@ -25,16 +25,21 @@
 #include "passes/Transforms/EscapeCheckerPass.hpp"
 #include "passes/Transforms/InstAnnotator.hpp"
 
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/STLFunctionalExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/LoopPass.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
@@ -374,6 +379,18 @@ static auto isStoreLocal(StoreInst *si, EscapeAnalysisResult &EAR, DominatorTree
 	return (alloc && EAR.escapesAfter(alloc, si, DT)) || !!(attr & WriteAttr::Local);
 }
 
+/* These effect checks accumulate sets, not path-dependent state, so visit
+ * each block that an iteration ending at LATCH may execute once, rather than
+ * the simple paths from the header to LATCH. Unlike these paths, the blocks
+ * include inner cycles: their effects count, but they may also run more than
+ * once per iteration (see mayRepeat()). */
+template <typename F>
+static void foreachInLoopBackReachable(BasicBlock *latch, Loop *loop, F &&visit)
+{
+	for (auto *block : getLoopBlocksReaching(latch, loop))
+		std::for_each(block->rbegin(), block->rend(), visit);
+}
+
 static auto isPathToHeaderEffectFree(BasicBlock *latch, Loop *l, ModuleAnalysisManager &MAM,
 				     bool &checkDynamically) -> bool
 {
@@ -388,7 +405,7 @@ static auto isPathToHeaderEffectFree(BasicBlock *latch, Loop *l, ModuleAnalysisM
 	auto effects = false;
 	std::vector<AtomicCmpXchgInst *> cass;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInLoopBackReachable(latch, l, [&](Instruction &i) {
 		/* Try to prove that failed CASes imply another iteration */
 		if (auto *casi = dyn_cast<AtomicCmpXchgInst>(&i)) {
 			cass.push_back(casi);
@@ -463,8 +480,27 @@ static auto dominatesAndPostdominates(Instruction *instA, Instruction *instB, Do
 	return DT.dominates(instA, instB) && PDT.dominates(instA->getParent(), instB->getParent());
 }
 
+/* Returns whether an iteration of L may run BB more than once, i.e., whether
+ * BB lies on a cycle that avoids the header of L. Unlike a subloop check, this
+ * also catches irreducible cycles. */
+static auto mayRepeat(const BasicBlock *bb, const Loop *l) -> bool;
+
+/* Returns whether, in an iteration of L, a CAS of CASS may run before an
+ * instruction for which MAYSPINSTART holds, and which itself may run before
+ * INST. INST must not repeat in an iteration (see mayRepeat()). */
+static auto mayRunSpinStartAfterCAS(Instruction *inst, Loop *l,
+				    const VSet<AtomicCmpXchgInst *> &cass,
+				    function_ref<bool(Instruction &)> maySpinStart) -> bool;
+
+/* Returns whether I may run a spin_start: I is either the spin_start of an
+ * inner loop (inner loops are checked first), or a call that may run a loop
+ * with a spin_start. Loops of clean functions have no side effects, and thus
+ * only get a spin_start with MARKSTARTS (see checkLoop()). */
+static auto maySpinStart(Instruction &i, const VSet<Function *> &cleanSet, bool markStarts,
+			 FunctionAnalysisManager &FAM) -> bool;
+
 static auto isPathToHeaderFAIZNE(BasicBlock *latch, Loop *l, ModuleAnalysisManager &MAM,
-				 Instruction *&lastEffect) -> bool
+				 bool markStarts, Instruction *&lastEffect) -> bool
 {
 	auto &FAM =
 		MAM.getResult<FunctionAnalysisManagerModuleProxy>(*latch->getParent()->getParent())
@@ -478,7 +514,7 @@ static auto isPathToHeaderFAIZNE(BasicBlock *latch, Loop *l, ModuleAnalysisManag
 	VSet<AtomicCmpXchgInst *> cass;
 	VSet<AtomicRMWInst *> fais;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInLoopBackReachable(latch, l, [&](Instruction &i) {
 		if (auto *faii = dyn_cast<AtomicRMWInst>(&i)) {
 			fais.insert(faii);
 			return;
@@ -508,8 +544,21 @@ static auto isPathToHeaderFAIZNE(BasicBlock *latch, Loop *l, ModuleAnalysisManag
 	}
 	if (!inci || !deci)
 		return false;
+
+	/* Blocking before the decrement assumes that each FAI runs once per
+	 * iteration */
+	if (mayRepeat(inci->getParent(), l) || mayRepeat(deci->getParent(), l))
+		return false;
 	if (std::ranges::any_of(cass,
 				[&](AtomicCmpXchgInst *casi) { return !DT.dominates(casi, deci); }))
+		return false;
+
+	/* The runtime check looks for writes (i.e., by a successful CAS) only
+	 * after the latest spin_start, so no other spin_start may run between a
+	 * CAS and the decrement */
+	if (mayRunSpinStartAfterCAS(deci, l, cass, [&](Instruction &i) {
+		    return maySpinStart(i, cleanSet, markStarts, FAM);
+	    }))
 		return false;
 
 	/* Check cancelation */
@@ -536,7 +585,7 @@ static auto isPathToHeaderLockZNE(BasicBlock *latch, Loop *l, ModuleAnalysisMana
 	VSet<CallInst *> unlocks;
 	VSet<PHINode *> phis;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInLoopBackReachable(latch, l, [&](Instruction &i) {
 		if (auto *ci = dyn_cast<CallInst>(&i)) {
 			auto name = getCalledFunOrStripValName(*ci);
 			if (isInternalFunction(name)) {
@@ -566,8 +615,98 @@ static auto isPathToHeaderLockZNE(BasicBlock *latch, Loop *l, ModuleAnalysisMana
 	if (!lDomU || !accessSameVariable(*locks[0]->arg_begin(), *unlocks[0]->arg_begin()))
 		return false;
 
+	/* Blocking before the unlock assumes that the lock and the unlock run once
+	 * per iteration */
+	if (mayRepeat(locks[0]->getParent(), l) || mayRepeat(unlocks[0]->getParent(), l))
+		return false;
+
 	lastEffect = unlocks[0];
 	return true;
+}
+
+static auto mayRepeat(const BasicBlock *bb, const Loop *l) -> bool
+{
+	SmallVector<const BasicBlock *, 16> worklist(successors(bb));
+	SmallPtrSet<const BasicBlock *, 32> seen;
+	while (!worklist.empty()) {
+		auto *block = worklist.pop_back_val();
+		if (block == l->getHeader() || !l->contains(block) || !seen.insert(block).second)
+			continue;
+		if (block == bb)
+			return true;
+		llvm::append_range(worklist, successors(block));
+	}
+	return false;
+}
+
+static auto mayRunSpinStartAfterCAS(Instruction *inst, Loop *l,
+				    const VSet<AtomicCmpXchgInst *> &cass,
+				    function_ref<bool(Instruction &)> maySpinStart) -> bool
+{
+	if (cass.empty())
+		return false;
+
+	for (auto *block : getLoopBlocksReaching(inst->getParent(), l)) {
+		for (auto &i : *block) {
+			/* INST does not repeat: what follows it in its block runs after it */
+			if (&i == inst)
+				break;
+			if (!maySpinStart(i))
+				continue;
+
+			auto before = getLoopBlocksReaching(block, l);
+			if (std::ranges::any_of(cass, [&](AtomicCmpXchgInst *casi) {
+				    auto *casBlock = casi->getParent();
+				    return before.contains(casBlock) &&
+					   (casBlock != block || casi->comesBefore(&i) ||
+					    mayRepeat(block, l));
+			    }))
+				return true;
+		}
+	}
+	return false;
+}
+
+/* Returns whether a call to FUN may run a loop. SEEN holds the functions
+ * already visited. */
+static auto mayRunLoop(Function *fun, FunctionAnalysisManager &FAM,
+		       SmallPtrSetImpl<Function *> &seen) -> bool;
+
+static auto maySpinStart(Instruction &i, const VSet<Function *> &cleanSet, bool markStarts,
+			 FunctionAnalysisManager &FAM) -> bool
+{
+	auto *ci = dyn_cast<CallInst>(&i);
+	if (!ci)
+		return false;
+
+	auto name = getCalledFunOrStripValName(*ci);
+	if (isInternalFunction(name))
+		return internalFunNames.at(name) == InternalFunctions::SpinStart;
+
+	auto *fun = dyn_cast<Function>(ci->getCalledOperand()->stripPointerCasts());
+	if (fun && !markStarts && cleanSet.contains(fun))
+		return false;
+
+	SmallPtrSet<Function *, 8> seen;
+	return mayRunLoop(fun, FAM, seen);
+}
+
+static auto mayRunLoop(Function *fun, FunctionAnalysisManager &FAM,
+		       SmallPtrSetImpl<Function *> &seen) -> bool
+{
+	if (!fun) /* indirect call */
+		return true;
+	if (fun->isDeclaration() || !seen.insert(fun).second)
+		return false;
+	if (!FAM.getResult<LoopAnalysis>(*fun).empty())
+		return true;
+
+	return llvm::any_of(instructions(*fun), [&](Instruction &i) {
+		auto *cb = dyn_cast<CallBase>(&i);
+		return cb &&
+		       mayRunLoop(dyn_cast<Function>(cb->getCalledOperand()->stripPointerCasts()),
+				  FAM, seen);
+	});
 }
 
 static auto getOrCreateExitingCondition(BasicBlock *header, Instruction *term) -> Value *
@@ -650,7 +789,7 @@ static auto checkLoop(Loop *l, ModuleAnalysisManager &MAM, bool markStarts) -> b
 	auto checkDynamically = false;
 	llvm::Instruction *lastZNEEffect = nullptr;
 	for (auto &latch : latches) {
-		if (isPathToHeaderFAIZNE(latch, l, MAM, lastZNEEffect)) {
+		if (isPathToHeaderFAIZNE(latch, l, MAM, markStarts, lastZNEEffect)) {
 			checkDynamically = true;
 			modified = true;
 			addPotentialSpinEndCallBeforeLastFai(latch, lastZNEEffect);

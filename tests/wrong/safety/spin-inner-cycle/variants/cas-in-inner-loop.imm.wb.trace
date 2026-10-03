@@ -1,0 +1,27 @@
+WARNING: In-place revisiting and symmetry reduction have no effect under IMM
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (0, 8) in graph:
+<-1, 0>:
+	(0, 1): LOOP_BEGIN cas-in-inner-loop.c:12
+	(0, 2): SPIN_START
+	(0, 3): CRsc (y, 0) [INIT] cas-in-inner-loop.c:16
+	(0, 4): CWsc (y, 1) cas-in-inner-loop.c:16
+	(0, 5): CRsc (w, 1) [INIT] cas-in-inner-loop.c:19
+	(0, 6): SPIN_START
+	(0, 7): CRsc (y, 1) [(0, 4)] cas-in-inner-loop.c:16
+	(0, 8): ERROR cas-in-inner-loop.c:26
+
+Trace to (0, 8):
+[main] cas-in-inner-loop.c: 12: for (;;) {
+[main] cas-in-inner-loop.c: 16: if (!atomic_compare_exchange_strong(&y, &e, 1))
+[main] cas-in-inner-loop.c: 19: for (int k = 0; k < 2 && atomic_compare_exchange_strong(&w, &e3, 1); k++) {
+[main] cas-in-inner-loop.c: 16: if (!atomic_compare_exchange_strong(&y, &e, 1))
+[main] cas-in-inner-loop.c: 26: assert(0); /* always reached */
+Assertion violation: 0
+*** Verification unsuccesful.
+Number of complete executions explored: 0

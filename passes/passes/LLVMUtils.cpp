@@ -19,7 +19,9 @@
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constant.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Dominators.h>
@@ -32,6 +34,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -252,6 +256,25 @@ auto tryThreadSuccessor(BranchInst *term, BasicBlock *succ) -> BasicBlock *
 		}
 	}
 	return nullptr;
+}
+
+auto getLoopBlocksReaching(BasicBlock *bb, Loop *l) -> VSet<BasicBlock *>
+{
+	std::vector<BasicBlock *> blocks;
+	SmallPtrSet<BasicBlock *, 32> seen;
+	SmallVector<BasicBlock *, 16> worklist{bb};
+	while (!worklist.empty()) {
+		auto *block = worklist.pop_back_val();
+		if (!seen.insert(block).second)
+			continue;
+		blocks.push_back(block);
+		if (block == l->getHeader())
+			continue;
+		for (auto *pred : predecessors(block))
+			if (l->contains(pred))
+				worklist.push_back(pred);
+	}
+	return VSet<BasicBlock *>(std::move(blocks));
 }
 
 void replaceUsesWithIf(Value *Old, Value *New, llvm::function_ref<bool(Use &U)> ShouldReplace)

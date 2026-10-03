@@ -27,6 +27,10 @@
 
 #include <string>
 
+namespace llvm {
+class Loop;
+} // namespace llvm
+
 using TerminatorInst = llvm::Instruction;
 
 #define GLOBALS(M) (M).globals()
@@ -186,6 +190,14 @@ void foreachInBackPathTo(llvm::BasicBlock *from, llvm::BasicBlock *toBB, F &&fun
 	llvm::SmallVector<llvm::BasicBlock *, 4> path;
 	::details::foreachInBackPathTo(from, toBB, path, fun);
 }
+
+/**
+ * Returns the blocks that an iteration of loop L may execute up to BB: the
+ * header of L, and the blocks of L that reach BB without going through the
+ * header. Unlike foreachInBackPathTo, this includes inner cycles, which lie
+ * on no simple path from the header.
+ */
+auto getLoopBlocksReaching(llvm::BasicBlock *bb, llvm::Loop *l) -> VSet<llvm::BasicBlock *>;
 
 /*
  * LLVM Utilities for older LLVM versions

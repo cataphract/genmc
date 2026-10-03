@@ -1,0 +1,65 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (1, 23) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:146
+	(0, 3): BLOCK[join]
+<0, 1> t1:
+	(1, 1): LOOP_BEGIN fai-dec-in-inner-loop.c:15
+	(1, 2): SPIN_START
+	(1, 3): URrlx (x, 0) [INIT] fai-dec-in-inner-loop.c:16
+	(1, 4): UWrlx (x, 1) fai-dec-in-inner-loop.c:16
+	(1, 5): Rrlx (done, 0) [INIT] fai-dec-in-inner-loop.c:17
+	(1, 6): Rrlx (a, 0) [INIT] fai-dec-in-inner-loop.c:20
+	(1, 7): SPIN_START
+	(1, 8): URrlx (x, 1) [(1, 4)] fai-dec-in-inner-loop.c:16
+	(1, 9): UWrlx (x, 2) fai-dec-in-inner-loop.c:16
+	(1, 10): Rrlx (done, 0) [INIT] fai-dec-in-inner-loop.c:17
+	(1, 11): Rrlx (a, 0) [INIT] fai-dec-in-inner-loop.c:20
+	(1, 12): SPIN_START
+	(1, 13): URrlx (x, 2) [(1, 9)] fai-dec-in-inner-loop.c:16
+	(1, 14): UWrlx (x, 3) fai-dec-in-inner-loop.c:16
+	(1, 15): Rrlx (done, 0) [INIT] fai-dec-in-inner-loop.c:17
+	(1, 16): Rrlx (a, 1) [(2, 1)] fai-dec-in-inner-loop.c:20
+	(1, 17): URrlx (x, 3) [(1, 14)] fai-dec-in-inner-loop.c:21
+	(1, 18): UWrlx (x, 2) fai-dec-in-inner-loop.c:21
+	(1, 19): Rrlx (a, 1) [(2, 1)] fai-dec-in-inner-loop.c:20
+	(1, 20): URrlx (x, 2) [(1, 18)] fai-dec-in-inner-loop.c:21
+	(1, 21): UWrlx (x, 1) fai-dec-in-inner-loop.c:21
+	(1, 22): Rrlx (a, 1) [(2, 1)] fai-dec-in-inner-loop.c:20
+	(1, 23): ERROR fai-dec-in-inner-loop.c:24
+<0, 2> t2:
+	(2, 1): Wrlx (a, 1) fai-dec-in-inner-loop.c:31
+	(2, 2): Wrlx (done, 1) fai-dec-in-inner-loop.c:32
+	(2, 3): THREAD_END
+Coherence:
+x: [ (1, 4): UWrlx (G#(0, 0), 1) (1, 9): UWrlx (G#(0, 0), 2) (1, 14): UWrlx (G#(0, 0), 3) (1, 18): UWrlx (G#(0, 0), 2) (1, 21): UWrlx (G#(0, 0), 1) ]
+
+Trace to (1, 23):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t1] fai-dec-in-inner-loop.c: 15: for (;;) {
+[t1] fai-dec-in-inner-loop.c: 16: atomic_fetch_add_explicit(&x, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 17: if (atomic_load_explicit(&done, memory_order_relaxed))
+[t1] fai-dec-in-inner-loop.c: 20: while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2) {
+[t1] fai-dec-in-inner-loop.c: 16: atomic_fetch_add_explicit(&x, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 17: if (atomic_load_explicit(&done, memory_order_relaxed))
+[t1] fai-dec-in-inner-loop.c: 20: while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2) {
+[t1] fai-dec-in-inner-loop.c: 16: atomic_fetch_add_explicit(&x, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 17: if (atomic_load_explicit(&done, memory_order_relaxed))
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t2] fai-dec-in-inner-loop.c: 31: atomic_store_explicit(&a, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 20: while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2) {
+[t1] fai-dec-in-inner-loop.c: 21: atomic_fetch_sub_explicit(&x, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 20: while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2) {
+[t1] fai-dec-in-inner-loop.c: 21: atomic_fetch_sub_explicit(&x, 1, memory_order_relaxed);
+[t1] fai-dec-in-inner-loop.c: 20: while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2) {
+[t1] fai-dec-in-inner-loop.c: 24: assert(k < 2);
+Assertion violation: k < 2
+*** Verification unsuccesful.
+Number of complete executions explored: 0
+Number of blocked executions seen: 1

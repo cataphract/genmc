@@ -1,0 +1,37 @@
+WARNING: In-place revisiting and symmetry reduction have no effect under IMM
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (0, 12) in graph:
+<-1, 0>:
+	(0, 1): LOOP_BEGIN lock-in-inner-dowhile.c:13
+	(0, 2): SPIN_START
+	(0, 3): Rrlx (done, 0) [INIT] lock-in-inner-dowhile.c:14
+	(0, 4): CRacq (m.__private, 0) [INIT] pthread.h:375
+	(0, 5): CWacq (m.__private, 1) pthread.h:375
+	(0, 6): Wrel (m.__private, 0) pthread.h:383
+	(0, 7): Rrlx (a, 1) [INIT] lock-in-inner-dowhile.c:21
+	(0, 8): CRacq (m.__private, 0) [(0, 6)] pthread.h:375
+	(0, 9): CWacq (m.__private, 1) pthread.h:375
+	(0, 10): Wrel (m.__private, 0) pthread.h:383
+	(0, 11): Rrlx (a, 1) [INIT] lock-in-inner-dowhile.c:21
+	(0, 12): ERROR lock-in-inner-dowhile.c:22
+Coherence:
+m.__private: [ (0, 5): CWacq (G#(0, 8), 1) (0, 6): Wrel (G#(0, 8), 0) (0, 9): CWacq (G#(0, 8), 1) (0, 10): Wrel (G#(0, 8), 0) ]
+
+Trace to (0, 12):
+[main] lock-in-inner-dowhile.c: 13: for (;;) {
+[main] lock-in-inner-dowhile.c: 14: if (atomic_load_explicit(&done, memory_order_relaxed))
+[main] pthread.h: 375: return __VERIFIER_mutex_lock(__mutex);
+[main] pthread.h: 383: return __VERIFIER_mutex_unlock(__mutex);
+[main] lock-in-inner-dowhile.c: 21: } while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2);
+[main] pthread.h: 375: return __VERIFIER_mutex_lock(__mutex);
+[main] pthread.h: 383: return __VERIFIER_mutex_unlock(__mutex);
+[main] lock-in-inner-dowhile.c: 21: } while (atomic_load_explicit(&a, memory_order_relaxed) && k < 2);
+[main] lock-in-inner-dowhile.c: 22: assert(k < 2);
+Assertion violation: k < 2
+*** Verification unsuccesful.
+Number of complete executions explored: 0
