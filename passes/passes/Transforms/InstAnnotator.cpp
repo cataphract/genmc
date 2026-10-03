@@ -33,6 +33,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/Support/Casting.h>
 
+#include <cstddef>
 #include <utility>
 #include <vector>
 
@@ -41,10 +42,14 @@ using namespace llvm;
 /* Returns whether E depends on a constant of unknown value (see generateOperandExpr()) */
 static auto dependsOnUnknownConstant(const SExpr<Value *> *e) -> bool;
 
+/* Returns the number of nodes in E */
+static auto countNodes(const SExpr<Value *> *e) -> std::size_t;
+
 void InstAnnotator::reset()
 {
 	statusMap.clear();
 	annotMap.clear();
+	annotNodes = 0;
 }
 
 auto InstAnnotator::getAnnotMapKey(Value *i) -> Value * { return i; }
@@ -61,7 +66,16 @@ auto InstAnnotator::releaseAnnot(Instruction *i) -> InstAnnotator::IRExprUP
 
 void InstAnnotator::setAnnot(Instruction *i, InstAnnotator::IRExprUP annot)
 {
+	annotNodes += countNodes(annot.get());
 	annotMap[getAnnotMapKey(i)] = std::move(annot);
+}
+
+static auto countNodes(const SExpr<Value *> *e) -> std::size_t
+{
+	std::size_t nodes = 1;
+	for (auto i = 0U; i < e->getNumKids(); ++i)
+		nodes += countNodes(e->getKid(i));
+	return nodes;
 }
 
 auto InstAnnotator::generateOperandExpr(Module *mod, Value *op) -> InstAnnotator::IRExprUP
@@ -322,6 +336,10 @@ void InstAnnotator::annotateDFS(Instruction *curr)
 
 	statusMap[curr] = InstAnnotator::left;
 
+	/* The successors may lack annotations then (see annotate()) */
+	if (isOverBudget())
+		return;
+
 	/* If we cannot get past this instruction, return either TRUE or the assumed expression */
 	if (succs.empty()) {
 		if (auto *ci = dyn_cast<CallInst>(curr)) {
@@ -355,9 +373,13 @@ auto InstAnnotator::annotate(Instruction *curr) -> InstAnnotator::IRExprUP
 	for (auto &i : instructions(curr->getParent()->getParent()))
 		statusMap[&i] = InstAnnotator::unseen;
 
-	/* The load annotation will be the expression from its successor to the assume */
+	/* The load annotation will be the expression from its successor to the assume.
+	 * Not annotating the load is always sound, so give up on one that is too
+	 * large (see maxAnnotNodes). */
 	VERIFY(isa<LoadInst>(curr) || isa<AtomicCmpXchgInst>(curr));
 	annotateDFS(curr->getNextNode());
+	if (isOverBudget())
+		return nullptr;
 	auto annot = releaseAnnot(curr->getNextNode());
 
 	/* At runtime, the registers that are not values of the current frame
@@ -491,6 +513,10 @@ void InstAnnotator::annotateCASWithBackedgeCondDFS(Instruction *curr,
 
 	statusMap[curr] = InstAnnotator::left;
 
+	/* The successors may lack annotations then (see annotateCASWithBackedgeCond()) */
+	if (isOverBudget())
+		return;
+
 	/*
 	 * If we cannot get past this instruction (meaning we either exited the loop or
 	 * traversed the backedge), return FALSE or TRUE (respectively)
@@ -537,5 +563,7 @@ auto InstAnnotator::annotateCASWithBackedgeCond(AtomicCmpXchgInst *curr, BasicBl
 	for (auto &i : instructions(curr->getParent()->getParent()))
 		statusMap[&i] = InstAnnotator::unseen;
 	annotateCASWithBackedgeCondDFS(curr->getNextNode(), backedgePaths, l, cleanSet);
+	if (isOverBudget())
+		return nullptr;
 	return releaseAnnot(curr->getNextNode());
 }

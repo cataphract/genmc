@@ -20,6 +20,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/Pass.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 
@@ -42,7 +43,7 @@ public:
 	using IRExprUP = std::unique_ptr<SExpr<Value *>>;
 
 	/* Returns the annotation for a load (TRUE if it depends on a constant of unknown
-	 * value) */
+	 * value), or nullptr if it is too large to compute (see maxAnnotNodes) */
 	auto annotate(Instruction *curr) -> IRExprUP;
 
 	/* Returns the condition under which bb jumps to its first successor.
@@ -50,7 +51,8 @@ public:
 	 * during the calculation of the annotation */
 	auto annotateBBCond(BasicBlock *bb, BasicBlock *pred = nullptr) -> IRExprUP;
 
-	/* Returns the annotation for a CAS associated with the backedge LATCH->header(L) */
+	/* Returns the annotation for a CAS associated with the backedge LATCH->header(L),
+	 * or nullptr if it is too large to compute (see maxAnnotNodes) */
 	auto annotateCASWithBackedgeCond(AtomicCmpXchgInst *curr, BasicBlock *latch, Loop *l,
 					 const VSet<llvm::Function *> *cleanSet = nullptr)
 		-> IRExprUP;
@@ -64,6 +66,13 @@ private:
 	 * It is a big ugly, but on par with RegisterExpr identifiers (see SExpr.hpp) */
 	using InstAnnotMap = std::unordered_map<Value *, IRExprUP>;
 	using InstStatusMap = DenseMap<Instruction *, Status>;
+
+	/* Bounds the nodes of all the annotations that a DFS computes. A branch
+	 * copies the annotations of both successors, so these can grow
+	 * exponentially with the branches that follow (e.g., in a sequence of
+	 * diamonds). Beyond this bound, the DFS gives up. (The DFSs of the test
+	 * suite compute at most a few hundred nodes.) */
+	static constexpr std::size_t maxAnnotNodes = std::size_t(1) << 18;
 
 	/* Resets all helper members used in the annotation */
 	void reset();
@@ -106,11 +115,18 @@ private:
 	/* Sets the annotation of I To be ANNOT */
 	void setAnnot(Instruction *i, IRExprUP annot);
 
+	/* Returns whether the annotations set since the last reset hold more than
+	 * maxAnnotNodes nodes */
+	[[nodiscard]] auto isOverBudget() const -> bool { return annotNodes > maxAnnotNodes; }
+
 	/* A helper status map */
 	InstStatusMap statusMap;
 
 	/* Maps instructions to annotations */
 	InstAnnotMap annotMap;
+
+	/* The nodes of the annotations set since the last reset */
+	std::size_t annotNodes = 0;
 };
 
 #endif /* GENMC_INST_ANNOTATOR_HPP */

@@ -55,7 +55,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
-#include <optional>
 #include <ranges>
 #include <type_traits>
 #include <unordered_map>
@@ -107,173 +106,107 @@ static auto accessSameVariable(const Value *ptr1, const Value *ptr2) -> bool
 	return false;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static auto isPHIRelatedToCASCmp(const PHINode *curr,
-				 const SmallVector<const AtomicCmpXchgInst *, 4> &cass,
-				 SmallVector<const PHINode *, 4> &phiChain,
-				 VSet<const PHINode *> &related) -> bool
-{
-	/* Check if we have already decided (or assumed) this phi is good */
-	if (related.contains(curr) || std::ranges::find(phiChain, curr) != phiChain.end())
-		return true;
+/* Returns whether ISGOOD holds for the values that reach PHI through Φs only,
+ * after stripping their casts */
+static auto allPHISourcesAre(const PHINode *phi, function_ref<bool(Value *)> isGood) -> bool;
 
-	for (Value *val : curr->incoming_values()) {
-		val = stripCasts(val);
-		if (isa<UndefValue>(val)) {
-			continue;
-		}
-		if (auto *li = dyn_cast<LoadInst>(val)) {
-			if (std::ranges::all_of(cass, [&](const AtomicCmpXchgInst *casi) {
-				    return !accessSameVariable(li->getPointerOperand(),
-							       casi->getPointerOperand()) ||
-					   !areSameLoadOrdering(li->getOrdering(),
-								casi->getSuccessOrdering());
-			    }))
-				return false;
-		} else if (auto *extract = dyn_cast<ExtractValueInst>(val)) {
-			auto *ecasi = extractsFromCAS(extract);
-			if (!ecasi || *extract->idx_begin() != 0)
-				return false;
-			if (std::ranges::all_of(cass, [&](const AtomicCmpXchgInst *casi) {
-				    return !accessSameVariable(ecasi->getPointerOperand(),
-							       casi->getPointerOperand()) ||
-					   !areSameLoadOrdering(ecasi->getSuccessOrdering(),
-								casi->getSuccessOrdering());
-			    }))
-				return false;
-		} else {
-			auto *phi = dyn_cast<PHINode>(val);
-			if (!phi)
-				return false;
-
-			phiChain.push_back(curr);
-			if (!isPHIRelatedToCASCmp(phi, cass, phiChain, related))
-				return false;
-			phiChain.pop_back();
-		}
-	}
-	return true;
-}
-
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static auto isPHIRelatedToCASRes(const PHINode *curr,
-				 const SmallVector<const AtomicCmpXchgInst *, 4> &cass,
-				 SmallVector<const PHINode *, 4> &phiChain,
-				 VSet<const PHINode *> &related) -> bool
-{
-	/* Check if we have already decided (or assumed) this phi is good */
-	if (related.contains(curr) || std::ranges::find(phiChain, curr) != phiChain.end())
-		return true;
-
-	for (Value *val : curr->incoming_values()) {
-		val = stripCasts(val);
-		if (auto *constant = dyn_cast<Constant>(val)) {
-			if (auto *ci = dyn_cast<ConstantInt>(constant)) {
-				if (!ci->isZero())
-					return false;
-			} else if (!isa<UndefValue>(constant)) {
-				return false;
-			}
-		} else if (auto *extract = dyn_cast<ExtractValueInst>(val)) {
-			auto *ecasi = extractsFromCAS(extract);
-			if (!ecasi || *extract->idx_begin() != 1)
-				return false;
-			if (std::ranges::all_of(cass, [&](const AtomicCmpXchgInst *casi) {
-				    return !accessSameVariable(ecasi->getPointerOperand(),
-							       casi->getPointerOperand()) ||
-					   !areSameLoadOrdering(ecasi->getSuccessOrdering(),
-								casi->getSuccessOrdering());
-			    }))
-				return false;
-		} else {
-			auto *phi = dyn_cast<PHINode>(val);
-			if (!phi)
-				return false;
-
-			phiChain.push_back(curr);
-			if (!isPHIRelatedToCASRes(phi, cass, phiChain, related))
-				return false;
-			phiChain.pop_back();
-		}
-	}
-
-	/* If the current PHI does not depend on any other PHI being good, then we mark it as such
-	 */
-	if (phiChain.empty())
-		related.insert(curr);
-	return true;
-}
+/* Returns whether some CAS of CASS reads PTR with an ordering like ORD */
+static auto readsLikeCAS(const SmallVector<const AtomicCmpXchgInst *, 4> &cass, const Value *ptr,
+			 AtomicOrdering ord) -> bool;
 
 static auto isPHIRelatedToCASCmp(const PHINode *phi,
 				 const SmallVector<const AtomicCmpXchgInst *, 4> &cass) -> bool
 {
-	VSet<const PHINode *> related;
-	SmallVector<const PHINode *, 4> phiChain;
-
-	return isPHIRelatedToCASCmp(phi, cass, phiChain, related);
+	return allPHISourcesAre(phi, [&](Value *val) {
+		if (isa<UndefValue>(val))
+			return true;
+		if (auto *li = dyn_cast<LoadInst>(val))
+			return readsLikeCAS(cass, li->getPointerOperand(), li->getOrdering());
+		auto *extract = dyn_cast<ExtractValueInst>(val);
+		auto *ecasi = extract ? extractsFromCAS(extract) : nullptr;
+		return ecasi && *extract->idx_begin() == 0 &&
+		       readsLikeCAS(cass, ecasi->getPointerOperand(), ecasi->getSuccessOrdering());
+	});
 }
 
 static auto isPHIRelatedToCASRes(const PHINode *phi,
 				 const SmallVector<const AtomicCmpXchgInst *, 4> &cass) -> bool
 {
-	VSet<const PHINode *> related;
-	SmallVector<const PHINode *, 4> phiChain;
-
-	return isPHIRelatedToCASRes(phi, cass, phiChain, related);
+	return allPHISourcesAre(phi, [&](Value *val) {
+		if (auto *constant = dyn_cast<Constant>(val)) {
+			if (auto *ci = dyn_cast<ConstantInt>(constant))
+				return ci->isZero();
+			return isa<UndefValue>(constant);
+		}
+		auto *extract = dyn_cast<ExtractValueInst>(val);
+		auto *ecasi = extract ? extractsFromCAS(extract) : nullptr;
+		return ecasi && *extract->idx_begin() == 1 &&
+		       readsLikeCAS(cass, ecasi->getPointerOperand(), ecasi->getSuccessOrdering());
+	});
 }
 
-static auto isPHIRelatedToLoad(const PHINode *curr, Value *&loadPtr,
-			       std::optional<AtomicOrdering> &loadOrd,
-			       SmallVector<const PHINode *, 4> &phiChain,
-			       VSet<const PHINode *> &related) -> bool
+static auto isPHIRelatedToLoad(const PHINode *phi) -> bool
 {
-	/* Check if we have already decided (or assumed) this phi is good */
-	if (related.contains(curr) || std::ranges::find(phiChain, curr) != phiChain.end())
+	/* All the loads must read the same variable with the same ordering.
+	 * Compare every two of them both ways, which does not depend on the order
+	 * in which they are found. */
+	SmallVector<const LoadInst *, 4> loads;
+	return allPHISourcesAre(phi, [&](Value *val) {
+		auto *li = dyn_cast<LoadInst>(val);
+		if (!li)
+			return false;
+		if (is_contained(loads, li))
+			return true;
+		if (!llvm::all_of(loads, [&](const LoadInst *other) {
+			    return accessSameVariable(li->getPointerOperand(),
+						      other->getPointerOperand()) &&
+				   accessSameVariable(other->getPointerOperand(),
+						      li->getPointerOperand()) &&
+				   areSameLoadOrdering(li->getOrdering(), other->getOrdering());
+		    }))
+			return false;
+		loads.push_back(li);
 		return true;
+	});
+}
 
-	for (Value *val : curr->incoming_values()) {
-		val = stripCasts(val);
-		if (auto *li = dyn_cast_or_null<LoadInst>(val)) {
-			if (loadPtr && !accessSameVariable(li->getPointerOperand(), loadPtr))
+static auto allPHISourcesAre(const PHINode *phi, function_ref<bool(Value *)> isGood) -> bool
+{
+	/* Following every path through the Φs takes exponential time once a
+	 * sequence of inlined dispatches passes the value along: visit each Φ
+	 * once instead. Φs on a cycle reach no other values that way. */
+	SmallPtrSet<const PHINode *, 8> visited{phi};
+	SmallVector<const PHINode *, 8> worklist{phi};
+	while (!worklist.empty()) {
+		for (Value *val : worklist.pop_back_val()->incoming_values()) {
+			val = stripCasts(val);
+			if (auto *inner = dyn_cast<PHINode>(val)) {
+				if (visited.insert(inner).second)
+					worklist.push_back(inner);
+			} else if (!isGood(val)) {
 				return false;
-			if (loadOrd.has_value() &&
-			    !areSameLoadOrdering(li->getOrdering(), *loadOrd))
-				return false;
-			loadPtr = li->getPointerOperand();
-			loadOrd = li->getOrdering();
-		} else {
-			auto *phi = dyn_cast<PHINode>(val);
-			if (!phi)
-				return false;
-
-			phiChain.push_back(curr);
-			if (!isPHIRelatedToLoad(phi, loadPtr, loadOrd, phiChain, related))
-				return false;
-			phiChain.pop_back();
+			}
 		}
 	}
 	return true;
 }
 
-static auto isPHIRelatedToLoad(const PHINode *phi) -> bool
+static auto readsLikeCAS(const SmallVector<const AtomicCmpXchgInst *, 4> &cass, const Value *ptr,
+			 AtomicOrdering ord) -> bool
 {
-	Value *loadPtr = nullptr; // NOLINT(misc-const-correctness)
-	std::optional<AtomicOrdering> loadOrd;
-	VSet<const PHINode *> related;
-	SmallVector<const PHINode *, 4> phiChain;
-
-	return isPHIRelatedToLoad(phi, loadPtr, loadOrd, phiChain, related);
+	return std::ranges::any_of(cass, [&](const AtomicCmpXchgInst *casi) {
+		return accessSameVariable(ptr, casi->getPointerOperand()) &&
+		       areSameLoadOrdering(ord, casi->getSuccessOrdering());
+	});
 }
 
 /*
  * This function checks whether a PHI node is tied to some load or CAS ('good' PHI).
- * A 'good' PHI node has incoming values that are either 1) PHI nodes that have been
- * deemed 'good', 2) constants and results of loads/CASes, or 3) loads at the same
+ * A 'good' PHI node has incoming values that are either 1) PHI nodes that are
+ * 'good' too, 2) constants and results of loads/CASes, or 3) loads at the same
  * location as some CAS and the compare operands of some CAS.
- * To avoid circles between PHIs, whenever we try to see whether a PHI is good,
- * we keep the current path in <phiChain>; if a node is deemed good and the chain
- * is empty (i.e., it does not depend on another node being deemed good), it is
- * moved to <related>, which stores PHIs that are related to some CAS operation.
+ * A PHI node is thus good if all the values that reach it through PHI nodes
+ * are; circles between PHIs add no such values.
  */
 static auto areBlockPHIsRelatedToLoopCASs(const BasicBlock *bb, Loop *l) -> bool
 {
@@ -344,6 +277,13 @@ static auto failedCASesLeadToHeader(const std::vector<AtomicCmpXchgInst *> &cass
 	if (cass.empty())
 		return true;
 
+	/* Each combination of CAS results in which some CAS succeeds is checked
+	 * below. Their number doubles with each CAS: give up on too many, which
+	 * also keeps the shifts that enumerate them in range. */
+	constexpr auto maxCASes = 16U;
+	if (cass.size() > maxCASes)
+		return false;
+
 	std::vector<ExtractValueInst *> extracts;
 
 	if (!tryGetCASResultExtracts(cass, extracts))
@@ -351,16 +291,20 @@ static auto failedCASesLeadToHeader(const std::vector<AtomicCmpXchgInst *> &cass
 
 	std::vector<std::unique_ptr<SExpr<Value *>>> casConditions;
 	casConditions.reserve(cass.size());
-	for (auto *cas : cass)
-		casConditions.push_back(
-			InstAnnotator().annotateCASWithBackedgeCond(cas, latch, l, &cleanSet));
+	for (auto *cas : cass) {
+		/* A condition too large to compute could hold after a successful CAS */
+		auto cond = InstAnnotator().annotateCASWithBackedgeCond(cas, latch, l, &cleanSet);
+		if (!cond)
+			return false;
+		casConditions.push_back(std::move(cond));
+	}
 
 	auto backedgeCondition = ConjunctionExpr<Value *>::create(std::move(casConditions));
-	for (auto i = 1U; std::cmp_less(i, (1 << extracts.size())); i++) {
+	for (auto i = 1U; i < (1U << extracts.size()); i++) {
 
 		std::unordered_map<Value *, SVal> valueMap;
 		for (auto j = 0U; j < extracts.size(); j++)
-			valueMap[extracts[j]] = (i & (1 << j)) ? SVal(1) : SVal(0);
+			valueMap[extracts[j]] = (i & (1U << j)) ? SVal(1) : SVal(0);
 
 		size_t unknowns = 0;
 		auto res = SExprEvaluator<Value *>().evaluate(backedgeCondition.get(), valueMap,
@@ -379,11 +323,12 @@ static auto isStoreLocal(StoreInst *si, EscapeAnalysisResult &EAR, DominatorTree
 	return (alloc && EAR.escapesAfter(alloc, si, DT)) || !!(attr & WriteAttr::Local);
 }
 
-/* These effect checks accumulate sets, not path-dependent state, so visit
- * each block that an iteration ending at LATCH may execute once, rather than
- * the simple paths from the header to LATCH. Unlike these paths, the blocks
- * include inner cycles: their effects count, but they may also run more than
- * once per iteration (see mayRepeat()). */
+/* These effect checks accumulate sets, not path-dependent state. Enumerating
+ * every path repeats the same instructions exponentially after inlining a
+ * sequence of dispatches, so visit each block that an iteration ending at
+ * LATCH may execute once instead. Unlike simple paths, these blocks include
+ * inner cycles: their effects count, but they may also run more than once per
+ * iteration (see mayRepeat()). */
 template <typename F>
 static void foreachInLoopBackReachable(BasicBlock *latch, Loop *loop, F &&visit)
 {
