@@ -1,0 +1,25 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (0, 3) conflicts with event (1, 1) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): Rna (index, 0) [INIT] const-table-write.c:24
+	(0, 3): Rna (table[0], 0) [(1, 1)] const-table-write.c:24
+<0, 1> thread:
+	(1, 1): Wna (table[0], 0) const-table-write.c:14
+	(1, 2): THREAD_END
+
+Trace to (0, 3):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[thread] const-table-write.c: 14: *(int (**)(void)) & table[0] = NULL;
+[main] const-table-write.c: 24: assert(table[index]() == 1);
+Trace to (1, 1):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[thread] const-table-write.c: 14: *(int (**)(void)) & table[0] = NULL;
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

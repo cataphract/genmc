@@ -1,0 +1,15 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Attempt to access non-allocated memory!
+Event (0, 1) in graph:
+<-1, 0>:
+	(0, 1): Rna (, 0) [BOTTOM] dispatch-out-of-bounds-constant.c:12
+
+Trace to (0, 1):
+[main] dispatch-out-of-bounds-constant.c: 12: int value = table[5]();
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

@@ -1,0 +1,17 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Attempt to access non-allocated memory!
+Event (0, 2) in graph:
+<-1, 0>:
+	(0, 1): Rna (index, 1000) [INIT] dispatch-out-of-bounds-nocall.c:13
+	(0, 2): Rna (, 0) [BOTTOM] dispatch-out-of-bounds-nocall.c:13
+
+Trace to (0, 2):
+[main] dispatch-out-of-bounds-nocall.c: 13: int (*f)(void) = table[index];
+[main] dispatch-out-of-bounds-nocall.c: 13: int (*f)(void) = table[index];
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

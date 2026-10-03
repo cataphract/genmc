@@ -1,0 +1,19 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (0, 3) in graph:
+<-1, 0>:
+	(0, 1): Rna (index, 2) [INIT] dispatch-out-of-bounds.c:12
+	(0, 2): Rna (index, 2) [INIT] dispatch-out-of-bounds.c:12
+	(0, 3): ERROR dispatch-out-of-bounds.c:12
+
+Trace to (0, 3):
+[main] dispatch-out-of-bounds.c: 12: return table[index]();
+[main] dispatch-out-of-bounds.c: 12: return table[index]();
+[main] dispatch-out-of-bounds.c: 12: return table[index]();
+Assertion violation: indirect call through an out-of-bounds dispatch table entry
+*** Verification unsuccesful.
+Number of complete executions explored: 0
