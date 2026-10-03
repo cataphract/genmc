@@ -41,7 +41,8 @@ public:
 	using IRExpr = SExpr<Value *>;
 	using IRExprUP = std::unique_ptr<SExpr<Value *>>;
 
-	/* Returns the annotation for a load */
+	/* Returns the annotation for a load (TRUE if it depends on a constant of unknown
+	 * value) */
 	auto annotate(Instruction *curr) -> IRExprUP;
 
 	/* Returns the condition under which bb jumps to its first successor.
@@ -67,7 +68,8 @@ private:
 	/* Resets all helper members used in the annotation */
 	void reset();
 
-	/* Generates an expression for a given instruction operand */
+	/* Generates an expression for a given instruction operand. A constant of unknown
+	 * value (e.g., the address of a global) yields a register with no known value */
 	auto generateOperandExpr(Module *mod, Value *op) -> IRExprUP;
 
 	/* Generates an expression for an instruction */

@@ -13,6 +13,7 @@
 
 #include "InstAnnotator.hpp"
 #include "genmc/ADT/VSet.hpp"
+#include "genmc/Support/Cast.hpp"
 #include "genmc/Support/Error.hpp"
 #include "genmc/Support/SExpr.hpp"
 #include "genmc/Support/SExprVisitor.hpp"
@@ -36,6 +37,9 @@
 #include <vector>
 
 using namespace llvm;
+
+/* Returns whether E depends on a constant of unknown value (see generateOperandExpr()) */
+static auto dependsOnUnknownConstant(const SExpr<Value *> *e) -> bool;
 
 void InstAnnotator::reset()
 {
@@ -65,26 +69,29 @@ auto InstAnnotator::generateOperandExpr(Module *mod, Value *op) -> InstAnnotator
 	const auto &DL = mod->getDataLayout();
 	constexpr SVal concUndefVal(42);
 
-	/* First, check if the expression is a constant */
+	/* First, check if the expression is a constant we can represent */
 	if (auto *constant = dyn_cast<Constant>(op)) {
 		auto *typ = constant->getType();
 		if (typ->isIntegerTy()) {
 			auto bitWidth = typ->getIntegerBitWidth();
 			if (isa<UndefValue>(constant))
 				return ConcreteExpr<Value *>::create(bitWidth, concUndefVal);
-			auto *ci = dyn_cast<ConstantInt>(constant);
-			VERIFY(ci); /* will fire for ConstantExpr (being deprecated) */
-			return ConcreteExpr<Value *>::create(bitWidth, SVal(ci->getLimitedValue()));
+			if (auto *ci = dyn_cast<ConstantInt>(constant))
+				return ConcreteExpr<Value *>::create(bitWidth,
+								     SVal(ci->getLimitedValue()));
 		}
 		if (typ->isPointerTy()) {
 			auto bitWidth = DL.getPointerTypeSizeInBits(typ);
 			if (isa<UndefValue>(constant))
 				return ConcreteExpr<Value *>::create(bitWidth, concUndefVal);
-			VERIFY(isa<ConstantPointerNull>(constant)); /* will fire for GlobalValue */
-			return ConcreteExpr<Value *>::create(bitWidth, SVal(0));
+			if (isa<ConstantPointerNull>(constant))
+				return ConcreteExpr<Value *>::create(bitWidth, SVal(0));
 		}
-		ERROR("Only integer and null constants currently allowed in assume() "
-		      "expressions.");
+		/* The value of other constants (e.g., the address of a global) is
+		 * only known at runtime, if at all: use a register, which has no
+		 * known value (see dependsOnUnknownConstant()) */
+		return RegisterExpr<Value *>::create(DL.getTypeAllocSizeInBits(typ),
+						     getAnnotMapKey(op));
 	}
 
 	/* Otherwise, it has to be an instruction or an argument */
@@ -351,7 +358,24 @@ auto InstAnnotator::annotate(Instruction *curr) -> InstAnnotator::IRExprUP
 	/* The load annotation will be the expression from its successor to the assume */
 	VERIFY(isa<LoadInst>(curr) || isa<AtomicCmpXchgInst>(curr));
 	annotateDFS(curr->getNextNode());
-	return releaseAnnot(curr->getNextNode());
+	auto annot = releaseAnnot(curr->getNextNode());
+
+	/* At runtime, the registers that are not values of the current frame
+	 * evaluate to the value read. That is wrong for an unknown constant, so do
+	 * not constrain the value read then */
+	if (dependsOnUnknownConstant(annot.get()))
+		return ConcreteExpr<Value *>::createTrue();
+	return annot;
+}
+
+static auto dependsOnUnknownConstant(const SExpr<Value *> *e) -> bool
+{
+	if (const auto *re = genmc::dyn_cast<RegisterExpr<Value *>>(e))
+		return isa<Constant>(re->getRegister());
+	for (auto i = 0U; i < e->getNumKids(); ++i)
+		if (dependsOnUnknownConstant(e->getKid(i)))
+			return true;
+	return false;
 }
 
 auto InstAnnotator::annotateBBCond(BasicBlock *bb, BasicBlock *pred /* = nullptr */)

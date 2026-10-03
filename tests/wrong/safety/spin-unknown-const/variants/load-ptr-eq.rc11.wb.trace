@@ -1,0 +1,27 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Safety violation!
+Event (1, 2) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:146
+	(0, 3): THREAD_END
+<0, 1> t1:
+	(1, 1): Rsc (p, 9223372036854775920) [(2, 1)] load-ptr-eq.c:13
+	(1, 2): ERROR load-ptr-eq.c:15
+<0, 2> t2:
+	(2, 1): Wsc (p, 9223372036854775920) load-ptr-eq.c:21
+	(2, 2): THREAD_END
+
+Trace to (1, 2):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t2] load-ptr-eq.c: 21: atomic_store(&p, &h);
+[t1] load-ptr-eq.c: 13: while (atomic_load(&p) == &g)
+[t1] load-ptr-eq.c: 15: assert(0);
+Assertion violation: 0
+*** Verification unsuccesful.
+Number of complete executions explored: 0
