@@ -268,6 +268,8 @@ static auto getPromotionGEPType(Value *op) -> Type *
 
 static void promoteMemCpyBytes(IRBuilder<> &builder, Value *dst, Value *src, uint64_t begin,
 			       uint64_t end, bool isVolatile);
+static void promoteMemSetBytes(IRBuilder<> &builder, Value *dst, uint8_t byte, uint64_t begin,
+			       uint64_t end, Align align, bool isVolatile);
 
 static void promoteMemCpy(IRBuilder<> &builder, Value *dst, Value *src,
 			  const std::vector<Value *> &args, Type *typ, uint64_t length,
@@ -325,21 +327,56 @@ static void promoteMemCpyBytes(IRBuilder<> &builder, Value *dst, Value *src, uin
 	}
 }
 
-static void promoteMemSet(IRBuilder<> &builder, Value *dst, Value *argVal,
-			  const std::vector<Value *> &args, Type *typ)
+static auto splatByte(unsigned bits, uint8_t byte) -> APInt
+{
+	return bits < 8 ? APInt(8, byte).trunc(bits) : APInt::getSplat(bits, APInt(8, byte));
+}
+
+static void promoteMemSet(IRBuilder<> &builder, Value *dst, uint8_t byte,
+			  const std::vector<Value *> &args, Type *typ, uint64_t length, Align align,
+			  bool isVolatile)
 {
 	VERIFY(typ->isIntegerTy() || typ->isPointerTy());
-	VERIFY(isa<ConstantInt>(argVal));
 
-	const auto &DL = builder.GetInsertBlock()->getParent()->getParent()->getDataLayout();
+	const auto &DL = builder.GetInsertBlock()->getModule()->getDataLayout();
+	auto offset =
+		static_cast<uint64_t>(DL.getIndexedOffsetInType(getPromotionGEPType(dst), args));
+	if (offset >= length)
+		return;
+
+	/* A range ending inside a scalar only sets its prefix */
+	if (DL.getTypeStoreSize(typ).getFixedValue() > length - offset) {
+		promoteMemSetBytes(builder, dst, byte, offset, length, align, isVolatile);
+		return;
+	}
+
 	auto sizeInBits = typ->isIntegerTy() ? typ->getIntegerBitWidth()
 					     : DL.getPointerTypeSizeInBits(typ);
-	const long int ival = cast<ConstantInt>(argVal)->getSExtValue();
-	Value *val = Constant::getIntegerValue(typ, APInt(sizeInBits, ival));
+	Value *val = Constant::getIntegerValue(typ, splatByte(sizeInBits, byte));
 
 	Value *dstGEP =
 		builder.CreateInBoundsGEP(getPromotionGEPType(dst), dst, args, "memset.dst.gep");
-	builder.CreateStore(val, dstGEP);
+	builder.CreateStore(val, dstGEP)->setVolatile(isVolatile);
+}
+
+/* Sets [BEGIN, END) of DST, which is ALIGN-aligned, with the widest stores
+ * (up to 64 bits) that are aligned and fit in the remaining range. Programs
+ * typically access such untyped ranges as aligned words, and the interpreter
+ * cannot compose a load from narrower writes. */
+static void promoteMemSetBytes(IRBuilder<> &builder, Value *dst, uint8_t byte, uint64_t begin,
+			       uint64_t end, Align align, bool isVolatile)
+{
+	for (auto offset = begin; offset < end;) {
+		auto width = std::min({uint64_t{sizeof(uint64_t)}, std::bit_floor(end - offset),
+				       commonAlignment(align, offset).value()});
+		auto *typ = builder.getIntNTy(width * 8);
+		auto *dstGEP = builder.CreateGEP(builder.getInt8Ty(), dst, builder.getInt64(offset),
+						 "memset.dst.gep");
+		builder.CreateAlignedStore(ConstantInt::get(typ, splatByte(width * 8, byte)),
+					   dstGEP, Align(width))
+			->setVolatile(isVolatile);
+		offset += width;
+	}
 }
 
 template <typename F>
@@ -504,8 +541,19 @@ static auto tryPromoteMemSet(MemSetInst *MS, SmallVector<MemIntrinsic *, 8> &pro
 	if (!canPromoteMemIntrinsic(MS))
 		return false;
 
+	/* We only set "len" bytes (3rd arg in llvm.memset) */
+	auto len = cast<ConstantInt>(MS->getLength())->getZExtValue();
+	if (len == 0) {
+		WARN_ONCE("memintr-zero-length",
+			  "Cannot promote zero-length mem intrinsic! Removing instruction...\n");
+		promoted.push_back(MS);
+		return true;
+	}
+
 	auto *dst = MS->getDest();
-	auto *val = MS->getValue();
+	VERIFY(isa<ConstantInt>(MS->getValue()));
+	auto byte = static_cast<uint8_t>(cast<ConstantInt>(MS->getValue())->getZExtValue());
+	auto align = MS->getDestAlign().valueOrOne();
 
 	auto *i64Ty = IntegerType::getInt64Ty(MS->getContext());
 	auto *nullInt = Constant::getNullValue(i64Ty);
@@ -513,10 +561,19 @@ static auto tryPromoteMemSet(MemSetInst *MS, SmallVector<MemIntrinsic *, 8> &pro
 	VERIFY(dstTyp);
 
 	IRBuilder<> builder(MS);
-	std::vector<Value *> args = {nullInt};
 
+	/* The inferred type can be narrower than the range, e.g., for a byte
+	 * GEP into a larger object, and then says nothing about its layout */
+	const auto &DL = MS->getModule()->getDataLayout();
+	if (DL.getTypeStoreSize(dstTyp).getFixedValue() < len) {
+		promoteMemSetBytes(builder, dst, byte, 0, len, align, MS->isVolatile());
+		promoted.push_back(MS);
+		return true;
+	}
+
+	std::vector<Value *> args = {nullInt};
 	promoteMemIntrinsic(dstTyp, args, [&](Type *typ, const std::vector<Value *> &args) {
-		promoteMemSet(builder, dst, val, args, typ);
+		promoteMemSet(builder, dst, byte, args, typ, len, align, MS->isVolatile());
 	});
 	promoted.push_back(MS);
 	return true;
