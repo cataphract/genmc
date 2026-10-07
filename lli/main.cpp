@@ -100,6 +100,11 @@ static llvm::cl::opt<unsigned int>
 	clThreads("nthreads", llvm::cl::cat(clGeneral), llvm::cl::init(1),
 		  llvm::cl::desc("Number of threads to be used in the exploration"));
 
+static llvm::cl::opt<bool> clPinThreads(
+	"pin-threads", llvm::cl::cat(clGeneral),
+	llvm::cl::desc("Pin each exploration thread to its own CPU (with -nthreads > 1; "
+		       "only pays off on a dedicated machine)"));
+
 static llvm::cl::opt<int>
 	clBound("bound", llvm::cl::cat(clGeneral), llvm::cl::init(-1), llvm::cl::value_desc("N"),
 		llvm::cl::desc("Do not explore executions exceeding given bound"));
@@ -363,6 +368,10 @@ static void checkLLIConfig(const LLIConfig &lliConfig)
 	if (lliConfig.skipGenmcStdBuild && !lliConfig.rust) {
 		ERROR("-skip-genmc-std-build used on non-Rust input.");
 	}
+	/* A pool without workers never completes its tasks */
+	if (lliConfig.threads == 0) {
+		ERROR("-nthreads must be at least 1.");
+	}
 }
 
 static void saveConfigOptions(Config &conf, LLIConfig &lliConfig)
@@ -371,6 +380,7 @@ static void saveConfigOptions(Config &conf, LLIConfig &lliConfig)
 	lliConfig.cflags.insert(lliConfig.cflags.end(), clCFLAGS.begin(), clCFLAGS.end());
 	lliConfig.inputFile = std::move(clInputFile);
 	lliConfig.threads = clThreads;
+	lliConfig.pinThreads = clPinThreads;
 	lliConfig.disableStopOnSystemError = clDisableStopOnSystemError;
 	lliConfig.collectLinSpec = clCollectLinSpec.empty()
 					   ? std::nullopt

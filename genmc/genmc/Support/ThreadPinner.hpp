@@ -14,63 +14,52 @@
 #ifndef GENMC_THREAD_PINNER_HPP
 #define GENMC_THREAD_PINNER_HPP
 
-#include <thread>
-#include <vector>
-#ifdef HAVE_LIBHWLOC
-#include <hwloc.h>
-#endif
+#include <memory>
 
 /*******************************************************************************
  **                           ThreadPinner Class
  ******************************************************************************/
 
-/** A class responsible for pinning threads to CPUs */
-
-#ifdef HAVE_LIBHWLOC
-
+/**
+ * A class responsible for pinning the workers of a thread pool to CPUs.
+ *
+ * Pinning is opt-in and best effort: it only happens if requested, if GenMC
+ * was built with hwloc, and if the platform can bind threads. Workers are
+ * spread over the CPUs the constructing thread may run on, so restrictions
+ * like taskset(1) are honored. hwloc stays out of this header, so the layout
+ * of the class does not depend on how GenMC was built.
+ */
 class ThreadPinner {
 
 public:
-	/*** Constructor ***/
-	explicit ThreadPinner(unsigned int n);
+	/*** Constructors ***/
+
+	/** Reserves a CPU for each of `numThreads` workers, if `enabled` */
+	ThreadPinner(unsigned int numThreads, bool enabled);
 	ThreadPinner() = delete;
 	ThreadPinner(const ThreadPinner &) = delete;
-
-	void pin(std::thread &t, unsigned int cpu);
-
-	/*** Destructor ***/
-	~ThreadPinner()
-	{
-		hwloc_topology_destroy(topology);
-		for (auto set : cpusets)
-			hwloc_bitmap_free(set);
-	}
-
-private:
-	unsigned int numTasks;
-	hwloc_topology_t topology;
-	std::vector<hwloc_cpuset_t> cpusets;
-};
-
-#else /* !HAVE_LIBHWLOC */
-
-class ThreadPinner {
-
-public:
-	/*** Constructor ***/
-	explicit ThreadPinner(unsigned int /*numThreads*/) {}
-	ThreadPinner() = delete;
-	ThreadPinner(const ThreadPinner &) = delete;
-	auto operator=(const ThreadPinner &) -> ThreadPinner & = delete;
 	ThreadPinner(ThreadPinner &&) = delete;
+
+	auto operator=(const ThreadPinner &) -> ThreadPinner & = delete;
 	auto operator=(ThreadPinner &&) -> ThreadPinner & = delete;
 
-	void pin(std::thread & /*thr*/, unsigned int /*cpu*/) {}
-
 	/*** Destructor ***/
-	~ThreadPinner() = default;
-};
 
-#endif /* HAVE_LIBHWLOC */
+	~ThreadPinner();
+
+	/** Returns whether workers will actually be pinned */
+	[[nodiscard]] auto isEnabled() const -> bool { return impl_ != nullptr; }
+
+	/** Pins the calling thread to the CPU reserved for worker `index`.
+	 * Workers must pin themselves: pinning a thread from outside races with
+	 * its exit. Workers can call this concurrently. */
+	void pinCurrentThread(unsigned int index) const;
+
+private:
+	struct Impl;
+
+	/** The CPU reserved for each worker (null if pinning is disabled) */
+	std::unique_ptr<Impl> impl_;
+};
 
 #endif /* GENMC_THREAD_PINNER_HPP */

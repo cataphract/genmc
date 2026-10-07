@@ -27,6 +27,7 @@ struct LLIConfig {
 
 	/*** Exploration options ***/
 	unsigned int threads{};
+	bool pinThreads{};
 	bool disableStopOnSystemError{};
 	bool isDepTrackingModel{};
 	std::optional<std::string> collectLinSpec;

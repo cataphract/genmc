@@ -40,6 +40,7 @@ set(LIB_SOURCES
 ### GenMC library
 find_package(Threads REQUIRED)
 find_library(HWLOC hwloc)
+find_path(HWLOC_INCLUDE_DIR hwloc.h)
 
 add_library(genmc_lib ${GENMC_LIB_TYPE} ${LIB_SOURCES})
 install(TARGETS genmc_lib ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME})
@@ -50,8 +51,12 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/genmc/
 target_include_directories(genmc_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(genmc_lib PRIVATE ${GENMC_WARNING_FLAGS})
 target_link_libraries(genmc_lib PUBLIC Threads::Threads genmc_config_includes)
-if(HWLOC)
-  target_link_libraries(genmc_lib PRIVATE hwloc)
+if(HWLOC AND HWLOC_INCLUDE_DIR)
+  message(STATUS "hwloc: ${HWLOC} (enables -pin-threads)")
+  # PRIVATE: only ThreadPinner.cpp uses hwloc; the class keeps it behind a pointer
+  target_compile_definitions(genmc_lib PRIVATE HAVE_LIBHWLOC)
+  target_include_directories(genmc_lib SYSTEM PRIVATE ${HWLOC_INCLUDE_DIR})
+  target_link_libraries(genmc_lib PRIVATE ${HWLOC})
 else()
-  message(STATUS "hwloc not found. Thread pinning disabled.")
+  message(STATUS "hwloc not found: -pin-threads will have no effect")
 endif()

@@ -40,7 +40,8 @@
 ThreadPool::ThreadPool(const LLIConfig &lliConfig, const std::shared_ptr<const Config> &conf,
 		       const std::unique_ptr<llvm::Module> &mod,
 		       const std::unique_ptr<ModuleInfo> &modInfo, TFunT threadFun)
-	: numWorkers_(lliConfig.threads), pinner_(numWorkers_), joiner_(workers_)
+	: numWorkers_(lliConfig.threads), pinner_(numWorkers_, lliConfig.pinThreads),
+	  joiner_(workers_)
 {
 
 #ifndef BUILD_LLI
@@ -91,8 +92,13 @@ void ThreadPool::addWorker(unsigned int i, std::unique_ptr<GenMCDriver> driver,
 		unsigned int, std::unique_ptr<GenMCDriver> driver,
 		std::unique_ptr<llvm::Interpreter> interp, TFunT threadFun)>;
 
-	ThreadT thread([this](unsigned int /*i*/, std::unique_ptr<GenMCDriver> driver,
+	ThreadT thread([this](unsigned int i, std::unique_ptr<GenMCDriver> driver,
 			      std::unique_ptr<llvm::Interpreter> interp, TFunT threadFun) {
+		/* The worker pins itself, before doing any work. Pinned from the
+		 * spawning thread, a worker that already exited would get the
+		 * spawning thread pinned in its place */
+		pinner_.pinCurrentThread(i);
+
 		while (true) {
 			auto taskUP = popTask();
 
@@ -118,7 +124,6 @@ void ThreadPool::addWorker(unsigned int i, std::unique_ptr<GenMCDriver> driver,
 
 	workers_.emplace_back(std::move(thread), i, std::move(driver), std::move(interp),
 			      threadFun);
-	pinner_.pin(workers_.back(), i);
 #endif
 }
 

@@ -236,6 +236,7 @@ private:
 	std::mutex stateMtx_;
 	std::condition_variable stateCV_;
 
+	/** Pins workers to CPUs (if requested) */
 	ThreadPinner pinner_;
 
 	/** The thread joiner */
