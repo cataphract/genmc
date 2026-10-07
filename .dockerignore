@@ -1,0 +1,8 @@
+build/
+RelWithDebInfo/
+Release/
+Debug/
+site/
+**/*.ll
+**/*.o
+**/*.a
