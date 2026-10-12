@@ -20,6 +20,7 @@
 #include <llvm/CodeGen/IntrinsicLowering.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
@@ -125,6 +126,34 @@ static auto runOnBasicBlock(BasicBlock &bb, IntrinsicLowering *IL) -> bool
 			auto *less = isSigned ? builder.CreateICmpSLT(a, b)
 					      : builder.CreateICmpULT(a, b);
 			auto *select = builder.CreateSelect(less, isMin ? a : b, isMin ? b : a);
+			select->takeName(I);
+			I->replaceAllUsesWith(select);
+			I->eraseFromParent();
+			modified = true;
+			break;
+		}
+		// https://llvm.org/docs/LangRef.html#llvm-fshl-intrinsic
+		case llvm::Intrinsic::fshl:
+		case llvm::Intrinsic::fshr: {
+			IRBuilder<> builder(I);
+			auto isLeft = I->getIntrinsicID() == Intrinsic::fshl;
+			auto *a = I->getArgOperand(0);
+			auto *b = I->getArgOperand(1);
+			auto *type = I->getType();
+			auto *bw = ConstantInt::get(type, type->getScalarSizeInBits());
+
+			/* fshl yields the high half of (a:b << s), fshr the low half of (a:b >> s),
+			 * with s taken modulo the bit width */
+			auto *s = builder.CreateURem(I->getArgOperand(2), bw);
+			auto *rs = builder.CreateSub(bw, s);
+			auto *hi = isLeft ? builder.CreateShl(a, s) : builder.CreateShl(a, rs);
+			auto *lo = isLeft ? builder.CreateLShr(b, rs) : builder.CreateLShr(b, s);
+			auto *shifted = builder.CreateOr(hi, lo);
+
+			/* For s == 0 the complementary shift is by the bit width (poison), and the
+			 * result is just the unshifted operand */
+			auto *isZero = builder.CreateICmpEQ(s, Constant::getNullValue(type));
+			auto *select = builder.CreateSelect(isZero, isLeft ? a : b, shifted);
 			select->takeName(I);
 			I->replaceAllUsesWith(select);
 			I->eraseFromParent();
