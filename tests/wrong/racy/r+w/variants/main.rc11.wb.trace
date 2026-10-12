@@ -1,0 +1,27 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (2, 1) conflicts with event (1, 1) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:146
+	(0, 3): THREAD_END
+<0, 1> thread_1:
+	(1, 1): Wna (na, 1) main.c:11
+	(1, 2): THREAD_END
+<0, 2> thread_2:
+	(2, 1): Rna (na, 1) [(1, 1)] main.c:17
+
+Trace to (2, 1):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[thread_1] main.c: 11: na = 1;
+[thread_2] main.c: 17: int r = na;
+Trace to (1, 1):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[thread_1] main.c: 11: na = 1;
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

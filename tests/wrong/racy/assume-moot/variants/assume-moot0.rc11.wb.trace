@@ -1,0 +1,34 @@
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (3, 2) conflicts with event (2, 2) in graph:
+<-1, 0>:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:146
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:146
+	(0, 3): THREAD_CREATE [thread 3] pthread.h:146
+	(0, 4): THREAD_JOIN [thread 1] pthread.h:163
+	(0, 5): BLOCK[join]
+<0, 1> t0:
+	(1, 1): Wrel (x, 1) assume-moot0.c:11
+	(1, 2): THREAD_END
+<0, 2> t1:
+	(2, 1): Racq (x, 0) [INIT] assume-moot0.c:17
+	(2, 2): Wna (, 1)
+	(2, 3): BLOCK[user]
+<0, 3> t2:
+	(3, 1): Rrlx (x, 0) [INIT] assume-moot0.c:27
+	(3, 2): Wna (a, 2) assume-moot0.c:28
+
+Trace to (3, 2):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t2] assume-moot0.c: 27: int r_x = atomic_load_explicit(&x, memory_order_relaxed);
+[t2] assume-moot0.c: 28: a = 2;
+Trace to (2, 2):
+[main] pthread.h: 146: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[t1] assume-moot0.c: 17: int r_x = atomic_load_explicit(&x, memory_order_acquire);
+
+*** Verification unsuccesful.
+Number of complete executions explored: 0

@@ -1,0 +1,19 @@
+WARNING: In-place revisiting and symmetry reduction have no effect under IMM
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+WARNING: Weak CAS at tests/wrong/safety/weak-cas-assume-strong/variants/weak-cas-assume-strong0.c:11 could not be strengthened to a strong one. Strong CASes enable more effective verification.
+*** Transformation complete.
+Error: Safety violation!
+Event (0, 2) in graph:
+<-1, 0>:
+	(0, 1): CRrlx (x, 0) [INIT] weak-cas-assume-strong0.c:11
+	(0, 2): ERROR weak-cas-assume-strong0.c:14
+
+Trace to (0, 2):
+[main] weak-cas-assume-strong0.c: 11: int r = atomic_compare_exchange_weak_explicit(&x, &e, 1,
+[main] weak-cas-assume-strong0.c: 14: assert(r); /* fails when the weak CAS spuriously fails */
+Assertion violation: r
+*** Verification unsuccesful.
+Number of complete executions explored: 1

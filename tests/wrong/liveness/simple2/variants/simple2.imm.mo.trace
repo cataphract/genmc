@@ -1,0 +1,23 @@
+WARNING: In-place revisiting and symmetry reduction have no effect under IMM
+GenMC v0.19.0 (LLVM 21.1.8)
+Copyright (C) 2024 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+WARNING: Atomic xchg support is experimental under dependency-tracking models!
+Error: Liveness violation!
+Event (0, 5) in graph:
+<-1, 0>:
+	(0, 1): LOOP_BEGIN simple2.c:8
+	(0, 2): SPIN_START
+	(0, 3): URsc (x, 0) [INIT] simple2.c:8
+	(0, 4): UWsc (x, 0) simple2.c:8
+	(0, 5): BLOCK[spinloop]
+
+Trace to (0, 5):
+[main] simple2.c: 8: while (!atomic_exchange(&x, 0))
+[main] simple2.c: 8: while (!atomic_exchange(&x, 0))
+Non-terminating spinloop: thread 0
+*** Verification unsuccesful.
+Number of complete executions explored: 0
+Number of blocked executions seen: 1
