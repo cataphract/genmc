@@ -535,6 +535,12 @@ private: // Helper functions
 	GenericValue executeGEPOperation(Value *Ptr, gep_type_iterator I, gep_type_iterator E,
 					 ExecutionContext &SF);
 
+	/* Lane-by-lane implementations of vector loads and stores */
+	void visitVectorLoad(LoadInst &I, GenericValue *ptr, FixedVectorType *vTyp,
+			     const std::unique_ptr<EventDeps> &deps);
+	void visitVectorStore(StoreInst &I, GenericValue *ptr, FixedVectorType *vTyp,
+			      const GenericValue &val, const std::unique_ptr<EventDeps> &deps);
+
 	// SwitchToNewBasicBlock - Start execution in a new basic block and run any
 	// PHI nodes in the top of the block.  This is used for intraprocedural
 	// control flow.

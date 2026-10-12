@@ -1499,6 +1499,11 @@ void Interpreter::visitLoadInst(LoadInst &I)
 	auto deps = makeEventDeps(getDataDeps(thr.id, I.getPointerOperand()), nullptr,
 				  getCtrlDeps(thr.id), getAddrPoDeps(thr.id), nullptr);
 
+	if (auto *vTyp = dyn_cast<FixedVectorType>(typ)) {
+		visitVectorLoad(I, ptr, vTyp, deps);
+		return;
+	}
+
 	/* ... and then the driver will provide the appropriate value */
 #define IMPLEMENT_READ_VISIT(__kind)                                                               \
 	case EventLabel::__kind: {                                                                 \
@@ -1556,6 +1561,11 @@ void Interpreter::visitStoreInst(StoreInst &I)
 				  getDataDeps(thr.id, I.getOperand(0)), getCtrlDeps(thr.id),
 				  getAddrPoDeps(thr.id), nullptr);
 
+	if (auto *vTyp = dyn_cast<FixedVectorType>(typ)) {
+		visitVectorStore(I, ptr, vTyp, val, deps);
+		return;
+	}
+
 	/* Inform the Driver about the newly interpreter store */
 
 	if (ord == MemOrdering::NotAtomic)
@@ -1567,6 +1577,67 @@ void Interpreter::visitStoreInst(StoreInst &I)
 
 	updateAddrPoDeps(getCurThr().id, I.getPointerOperand());
 	return;
+}
+
+/* Returns the size (in bytes) of each lane of a vector accessed in memory,
+ * provided that lanes are laid out at byte boundaries without padding. */
+static auto getVectorLaneSize(const DataLayout &DL, FixedVectorType *vTyp) -> unsigned int
+{
+	auto *eTyp = vTyp->getElementType();
+	auto size = DL.getTypeAllocSize(eTyp).getFixedValue();
+	ERROR_ON(DL.getTypeSizeInBits(eTyp).getFixedValue() != size * CHAR_BIT,
+		 "Unsupported vector memory access with non-byte-sized lanes!");
+	return size;
+}
+
+/* SVals cannot hold whole vectors, so vector loads are split into one
+ * access per lane. This also keeps them compatible with scalar accesses
+ * to individual lanes. LLVM IR does not admit atomic vector loads. */
+void Interpreter::visitVectorLoad(LoadInst &I, GenericValue *ptr, FixedVectorType *vTyp,
+				  const std::unique_ptr<EventDeps> &deps)
+{
+	VERIFY(I.getOrdering() == AtomicOrdering::NotAtomic);
+
+	auto *eTyp = vTyp->getElementType();
+	auto laneSize = getVectorLaneSize(getDataLayout(), vTyp);
+	GenericValue result;
+	result.AggregateVal.resize(vTyp->getNumElements());
+	for (auto i = 0U; i < vTyp->getNumElements(); i++) {
+		auto *lanePtr = (GenericValue *)((char *)ptr + i * laneSize);
+		auto val = CALL_DRIVER(handleNALoad, currDbgInfo(lanePtr), currPos(), lanePtr,
+				       laneSize, GET_DEPS(deps));
+
+		/* NA loads carry no annotations and cannot request a reset;
+		 * on errors, the execution stops anyway */
+		auto retVal = std::get_if<SVal>(&val);
+		if (!retVal)
+			return;
+
+		updateDataDeps(getCurThr().id, &I, currPos());
+		result.AggregateVal[i] = SVAL_TO_GV(*retVal, eTyp);
+	}
+	updateAddrPoDeps(getCurThr().id, I.getPointerOperand());
+
+	SetValue(&I, result, ECStack().back());
+}
+
+/* Vector stores are split into one access per lane, as vector loads are */
+void Interpreter::visitVectorStore(StoreInst &I, GenericValue *ptr, FixedVectorType *vTyp,
+				   const GenericValue &val, const std::unique_ptr<EventDeps> &deps)
+{
+	VERIFY(I.getOrdering() == AtomicOrdering::NotAtomic);
+
+	auto *eTyp = vTyp->getElementType();
+	auto laneSize = getVectorLaneSize(getDataLayout(), vTyp);
+	for (auto i = 0U; i < vTyp->getNumElements(); i++) {
+		auto *lanePtr = (GenericValue *)((char *)ptr + i * laneSize);
+		auto ret = CALL_DRIVER(handleNAStore, currDbgInfo(lanePtr), currPos(), lanePtr,
+				       laneSize, GV_TO_SVAL(val.AggregateVal[i], eTyp),
+				       GET_DEPS(deps));
+		if (!std::holds_alternative<bool>(ret))
+			return;
+	}
+	updateAddrPoDeps(getCurThr().id, I.getPointerOperand());
 }
 
 void Interpreter::visitFenceInst(FenceInst &I)
@@ -2495,6 +2566,9 @@ void Interpreter::visitExtractElementInst(ExtractElementInst &I)
 		case Type::DoubleTyID:
 			Dest.DoubleVal = Src1.AggregateVal[indx].DoubleVal;
 			break;
+		case Type::PointerTyID:
+			Dest.PointerVal = Src1.AggregateVal[indx].PointerVal;
+			break;
 		}
 	} else {
 		dbgs() << "Invalid index in extractelement instruction\n";
@@ -2534,6 +2608,9 @@ void Interpreter::visitInsertElementInst(InsertElementInst &I)
 		break;
 	case Type::DoubleTyID:
 		Dest.AggregateVal[indx].DoubleVal = Src2.DoubleVal;
+		break;
+	case Type::PointerTyID:
+		Dest.AggregateVal[indx].PointerVal = Src2.PointerVal;
 		break;
 	}
 	SetValue(&I, Dest, SF);
@@ -2769,6 +2846,16 @@ GenericValue Interpreter::getOperandValue(Value *V, ExecutionContext &SF)
 {
 	if (ConstantExpr *CE = dyn_cast<ConstantExpr>(V)) {
 		return getConstantExprValue(CE, SF);
+	} else if (auto *vTyp = dyn_cast<FixedVectorType>(V->getType());
+		   vTyp && vTyp->getElementType()->isPointerTy() && isa<Constant>(V)) {
+		/* ExecutionEngine::getConstantValue() only fills integer and
+		 * floating-point lanes, so evaluate pointer lanes one by one */
+		GenericValue result;
+		result.AggregateVal.resize(vTyp->getNumElements());
+		for (auto i = 0U; i < vTyp->getNumElements(); i++)
+			result.AggregateVal[i] =
+				getOperandValue(cast<Constant>(V)->getAggregateElement(i), SF);
+		return result;
 	} else if (Constant *CPV = dyn_cast<Constant>(V)) {
 		return getConstantValue(CPV);
 	} else if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) {
