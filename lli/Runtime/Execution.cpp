@@ -1670,10 +1670,13 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 		return;
 	}
 
-	auto lDeps = makeEventDeps(getDataDeps(thr.id, I.getPointerOperand()),
-				   getDataDeps(thr.id, I.getNewValOperand()), getCtrlDeps(thr.id),
-				   getAddrPoDeps(thr.id),
+	auto rDeps = makeEventDeps(getDataDeps(thr.id, I.getPointerOperand()), nullptr,
+				   getCtrlDeps(thr.id), getAddrPoDeps(thr.id),
 				   getDataDeps(thr.id, I.getCompareOperand()));
+	updateAddrPoDeps(thr.id, I.getPointerOperand());
+	auto wDeps = makeEventDeps(getDataDeps(thr.id, I.getPointerOperand()),
+				   getDataDeps(thr.id, I.getNewValOperand()), getCtrlDeps(thr.id),
+				   getAddrPoDeps(thr.id), nullptr);
 
 	SVal res{};
 	int cmpRes{};
@@ -1685,7 +1688,8 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 				       toGenMCOrdering(I.getFailureOrdering()), ptr, size,         \
 				       GV_TO_SVAL(cmpVal, typ), GV_TO_SVAL(newVal, typ),           \
 				       getWriteAttr(I), I.isWeak(), nullptr,                       \
-				       getCurrentAnnotConcretized(), GET_DEPS(lDeps));             \
+				       getCurrentAnnotConcretized(), GET_DEPS(rDeps),              \
+				       GET_DEPS(wDeps));                                           \
                                                                                                    \
 		auto retVal = std::get_if<GenMCDriver::CasReadResult>(&ret);                       \
 		if (!retVal)                                                                       \
@@ -1693,16 +1697,11 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 		res = retVal->val;                                                                 \
 		cmpRes = retVal->success;                                                          \
 		updateDataDeps(getCurThr().id, &I, currPos());                                     \
-		updateAddrPoDeps(getCurThr().id, I.getPointerOperand());                           \
 		if (!cmpRes)                                                                       \
 			break;                                                                     \
-		auto sDeps = makeEventDeps(getDataDeps(getCurThr().id, I.getPointerOperand()),     \
-					   getDataDeps(getCurThr().id, I.getNewValOperand()),      \
-					   getCtrlDeps(getCurThr().id), getAddrPoDeps(thr.id),     \
-					   nullptr);                                               \
 		CALL_DRIVER(handle##__kindW, currDbgInfo(ptr), currPos(),                          \
 			    toGenMCOrdering(I.getSuccessOrdering()), ptr, size,                    \
-			    GV_TO_SVAL(newVal, typ), getWriteAttr(I), GET_DEPS(sDeps));            \
+			    GV_TO_SVAL(newVal, typ), getWriteAttr(I), GET_DEPS(wDeps));            \
 		break;                                                                             \
 	}
 
@@ -1713,7 +1712,7 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 	case switchPair(EventLabel::HelpingCas, EventLabel::HelpingCas): {
 		CALL_DRIVER(handleHelpingCas, currDbgInfo(ptr), currPos(),
 			    toGenMCOrdering(I.getSuccessOrdering()), ptr, size,
-			    GV_TO_SVAL(cmpVal, typ), GV_TO_SVAL(newVal, typ), GET_DEPS(lDeps));
+			    GV_TO_SVAL(cmpVal, typ), GV_TO_SVAL(newVal, typ), GET_DEPS(rDeps));
 		break;
 	}
 	default:
@@ -1750,16 +1749,24 @@ void Interpreter::visitAtomicRMWInst(AtomicRMWInst &I)
 		return;
 	}
 
-	auto deps = makeEventDeps(getDataDeps(thr.id, I.getPointerOperand()),
-				  getDataDeps(thr.id, I.getValOperand()), getCtrlDeps(thr.id),
-				  getAddrPoDeps(thr.id), nullptr);
+	const auto *addrDeps = getDataDeps(thr.id, I.getPointerOperand());
+	auto rDeps = makeEventDeps(addrDeps, nullptr, getCtrlDeps(thr.id), getAddrPoDeps(thr.id),
+				   nullptr);
+	DepInfo valDeps;
+	if (getDepTracker()) {
+		valDeps = *getDataDeps(thr.id, I.getValOperand());
+		if (I.getOperation() != AtomicRMWInst::BinOp::Xchg)
+			valDeps.update(DepInfo(nextPos()));
+	}
+	auto wDeps = makeEventDeps(addrDeps, &valDeps, getCtrlDeps(thr.id), getAddrPoDeps(thr.id),
+				   nullptr);
 
 #define IMPLEMENT_FAI_VISIT(__kindR, __kindW)                                                      \
 	case switchPair(EventLabel::__kindR, EventLabel::__kindW): {                               \
 		auto ret = CALL_DRIVER(handle##__kindR, currDbgInfo(ptr), currPos(),               \
 				       toGenMCOrdering(I.getOrdering()), ptr, size,                \
 				       toGenMCBinOp(I.getOperation()), val, getWriteAttr(I),       \
-				       nullptr, std::nullopt, GET_DEPS(deps));                     \
+				       nullptr, std::nullopt, GET_DEPS(rDeps), GET_DEPS(wDeps));   \
                                                                                                    \
 		auto retVal = std::get_if<SVal>(&ret);                                             \
 		if (!retVal)                                                                       \
@@ -1771,7 +1778,7 @@ void Interpreter::visitAtomicRMWInst(AtomicRMWInst &I)
 		auto newVal = executeRMWBinOp(res, val, size, toGenMCBinOp(I.getOperation()));     \
 		CALL_DRIVER(handle##__kindW, currDbgInfo(ptr), currPos(),                          \
 			    toGenMCOrdering(I.getOrdering()), ptr, size, newVal, getWriteAttr(I),  \
-			    GET_DEPS(deps));                                                       \
+			    GET_DEPS(wDeps));                                                      \
 		break;                                                                             \
 	}
 
